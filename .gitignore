@@ -1,0 +1,46 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+venv/
+pyvenv.cfg
+.env
+.venv
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Databases
+*.db
+*.sqlite3
+philosophers_db/
+
+# Assets & Audio
+audio_cache/
+temp_audio/
+*.mp3
+*.wav
+
+# IDEs
+.idea/
+.vscode/
+
+# Project Specific
+bin/*.exe
+philosophers_db.zip
+_archive/
+books/
+# Note: books/ usually contains content that shouldn't be shared publicly if it's copyrighted literature.

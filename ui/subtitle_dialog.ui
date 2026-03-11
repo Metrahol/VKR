@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>Dialog</class>
+ <widget class="QDialog" name="Dialog">
+  <property name="windowModality">
+   <enum>Qt::ApplicationModal</enum>
+  </property>
+  <property name="enabled">
+   <bool>true</bool>
+  </property>
+  <property name="geometry">
+   <rect>
+    <x>0</x>
+    <y>0</y>
+    <width>431</width>
+    <height>277</height>
+   </rect>
+  </property>
+  <property name="windowTitle">
+   <string/>
+  </property>
+  <property name="styleSheet">
+   <string notr="true">QDialog {
+    border: none;
+    background-color: rgba(0, 0, 100, 0.9); 
+    border: 1px solid #8892b0; 
+    border-radius: 15px;
+}</string>
+  </property>
+  <widget class="QLabel" name="speakerNameLabel">
+   <property name="geometry">
+    <rect>
+     <x>140</x>
+     <y>10</y>
+     <width>291</width>
+     <height>51</height>
+    </rect>
+   </property>
+   <property name="styleSheet">
+    <string notr="true">color: #E0E0E0; font-size: 20px; font-weight: bold; background-color: transparent; border: none;</string>
+   </property>
+   <property name="text">
+    <string>Иммануил Кант</string>
+   </property>
+  </widget>
+  <widget class="QLabel" name="speechTextLabel">
+   <property name="geometry">
+    <rect>
+     <x>10</x>
+     <y>80</y>
+     <width>401</width>
+     <height>121</height>
+    </rect>
+   </property>
+   <property name="styleSheet">
+    <string notr="true">color:#D0D0D0; font-size: 22px; background-color: transparent; border: none;</string>
+   </property>
+   <property name="text">
+    <string>Категорический императив требует соблюдения моральных обязанностей независимо от желания и интересов...</string>
+   </property>
+   <property name="wordWrap">
+    <bool>true</bool>
+   </property>
+  </widget>
+ </widget>
+ <resources/>
+ <connections/>
+</ui>

@@ -1,0 +1,14 @@
+PySide6
+chromadb
+sentence-transformers
+duckduckgo-search
+SpeechRecognition
+bcrypt
+python-dotenv
+edge-tts
+PyMuPDF
+python-docx
+reportlab
+gTTS
+pygame
+numpy

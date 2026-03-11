@@ -5,7 +5,7 @@ load_dotenv()
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-# Ленивая инициализация базы и тяжелых нейронок
+
 _chroma_client = None
 _sent_tf_ef_instance = None
 
@@ -17,7 +17,6 @@ def get_chroma_client():
         _chroma_client = chromadb.PersistentClient(path=os.path.join(BASE_DIR, "philosophers_db"))
     return _chroma_client
 
-# Ленивая загрузка модели, чтобы не тормозить запуск приложения
 _sent_tf_ef_instance = None
 
 def get_embedding_function():
@@ -31,7 +30,6 @@ def get_embedding_function():
     return _sent_tf_ef_instance
 
 
-# Философы, для которых мы используем только веб-поиск (нет локальных книг)
 WEB_ONLY_PHILOSOPHERS = {
     "Альберт Эйнштейн", 
     "Исаак Ньютон", 
@@ -56,8 +54,6 @@ def get_collection_name(name):
     res = re.sub(r'[^a-z0-9._-]', '', res)
     return res
 
-# Маппинг полных имён → имён коллекций в ChromaDB
-# (если коллекция была создана под коротким именем)
 RAG_NAME_MAP = {
     "Зигмунд Фрейд": "Фрейд",
     "Мюррей Ротбард": "Ротбард",
@@ -72,22 +68,20 @@ def get_philosopher_context(philosopher_name, user_argument, top_k=3):
     """
     
     if philosopher_name in WEB_ONLY_PHILOSOPHERS:
-        # Онлайн поиск для философов без книг
+
         query = f"Философия взгляды цитаты {philosopher_name} {user_argument}"
         print(f"[{philosopher_name}] Использую веб-поиск для 'воспоминаний': {query}")
-        # Получаем данные из сети
         context_text = get_web_context([query], max_results_per_query=top_k)
         if context_text == "No web context available":
             return "(Онлайн-память недоступна, опирайтесь на свои базовые знания и характер.)"
         return f"(Справка из сети по вашим взглядам на тему '{user_argument}'):\n{context_text}"
     
-    # ---------------- Векторный поиск (ChromaDB) ----------------
-    # Проверяем маппинг имён (если коллекция создана под другим именем)
+
     rag_name = RAG_NAME_MAP.get(philosopher_name, philosopher_name)
     collection_name = get_collection_name(rag_name)
     
     try:
-        # Проверяем, существует ли коллекция
+
         client = get_chroma_client()
         collection = client.get_collection(name=collection_name, embedding_function=get_embedding_function())
     except Exception as e:
@@ -95,13 +89,11 @@ def get_philosopher_context(philosopher_name, user_argument, top_k=3):
         return "(Воспоминания из книг недоступны. Опирайтесь на общие знания.)"
 
     try:
-        # Ищем в Chroma, она сама сделает эмбеддинг текста запроса
         db_results = collection.query(
             query_texts=[user_argument],
             n_results=top_k
         )
         
-        # Формируем текст
         if not db_results['documents'] or not db_results['documents'][0]:
             return "(Подходящих цитат в ваших трудах не найдено.)"
             
@@ -128,7 +120,6 @@ def get_web_context(queries_list, max_results_per_query=2):
     for query in queries_list:
         try:
             print(f"[Web-RAG] Поиск в DuckDuckGo: '{query}'...")
-            # Получаем результаты
             results = ddgs.text(query, max_results=max_results_per_query)
             
             for index, r in enumerate(results):
@@ -143,11 +134,9 @@ def get_web_context(queries_list, max_results_per_query=2):
     if not all_results:
         return "No web context available"
         
-    # Склеиваем результаты
     return "\n".join(all_results)
 
 if __name__ == "__main__":
-    # Тестирование модуля
     print("Тест WEB-ONLY философа (Сократ):")
     ctx = get_philosopher_context("Сократ", "что такое справедливость?")
     print(ctx)

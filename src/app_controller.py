@@ -15,7 +15,6 @@ MUSIC_DIR = os.path.join(BASE_DIR, "music")
 ASSETS_DIR = os.path.join(BASE_DIR, "assets")
 UI_DIR = os.path.join(BASE_DIR, "ui")
 
-# Импорт твоих модулей
 from rag_retriever import get_philosopher_context, get_web_context
 import resources_rc
 from debate_manager import DebateManager
@@ -27,9 +26,6 @@ from philosophers_data import PHILOSOPHERS_DATA
 SENTENCE_SPLIT_RE = re.compile(r'(?<=[.!?…])\s+')
 
 
-# ==========================================
-# 1. ПОТОК РАСПОЗНАВАНИЯ (УЛУЧШЕННЫЙ)
-# ==========================================
 class SpeechThread(QThread):
     """Поток для распознавания речи с настройками для длинных фраз"""
     status_updated = Signal(str)
@@ -40,11 +36,11 @@ class SpeechThread(QThread):
     def run(self):
         recognizer = sr.Recognizer()
 
-        # --- ВАЖНЫЕ НАСТРОЙКИ КАЧЕСТВА ---
+
         recognizer.energy_threshold = 300  # Чувствительность микрофона
         recognizer.dynamic_energy_threshold = True
-        recognizer.pause_threshold = 1.2  # Ждем 1.2 сек тишины перед тем как закончить (было 0.8)
-        # ---------------------------------
+        recognizer.pause_threshold = 1.2  # Ждем 1.2 сек тишины перед тем как закончить 
+        
 
         try:
             with sr.Microphone() as source:
@@ -58,9 +54,6 @@ class SpeechThread(QThread):
 
                 self.status_updated.emit("Обрабатываю...")
 
-                # Используем Google Cloud Speech (через библиотеку)
-                # Совет: Говори четко. Для идеального распознавания терминов нужен OpenAI Whisper,
-                # но он требует мощной видеокарты и сложной установки. Google - лучший из простых.
                 text = recognizer.recognize_google(audio, language="ru-RU")
 
                 self.text_recognized.emit(text)
@@ -75,8 +68,6 @@ class SpeechThread(QThread):
             self.finished_listening.emit()
 
 
-# 1b. ПОТОК ФОРМАТИРОВАНИЯ ТЕМЫ (DeepSeek)
-# ==========================================
 class TopicFormatterThread(QThread):
     """Запускает DeepSeekManager.format_topic в отдельном потоке, чтобы не замораживать UI."""
     topic_ready = Signal(str)
@@ -90,7 +81,7 @@ class TopicFormatterThread(QThread):
         result = self.ds.format_topic(self.raw_topic)
         self.topic_ready.emit(result)
 
-# ==========================================
+
 class VoiceInputDialog(QtWidgets.QDialog):
     def __init__(self, parent=None, title="Ваш ход", label_text="Введите аргумент:", is_tutorial=False):
         super().__init__(parent)
@@ -98,7 +89,7 @@ class VoiceInputDialog(QtWidgets.QDialog):
         self.resize(600, 200)
 
         if is_tutorial:
-            # Делаем обычным виджетом внутри родителя без рамки
+
             self.setWindowFlags(Qt.WindowType.Widget | Qt.WindowType.FramelessWindowHint)
             self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
             self.setModal(False)
@@ -106,7 +97,6 @@ class VoiceInputDialog(QtWidgets.QDialog):
             self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Dialog)
             self.setModal(True)
 
-        # СТИЛЬ: Плотный темный фон, чтобы не "висело в воздухе"
         self.setStyleSheet("""
             QDialog {
                 /* Темно-синяя подложка, почти непрозрачная */
@@ -181,19 +171,17 @@ class VoiceInputDialog(QtWidgets.QDialog):
         mic_layout.addWidget(self.mic_btn, alignment=Qt.AlignmentFlag.AlignCenter)
         mic_layout.addWidget(self.status_lbl, alignment=Qt.AlignmentFlag.AlignCenter)
 
-        # Кнопка ОТПРАВИТЬ (справа, большая)
+        # Кнопка ОТПРАВИТЬ 
         self.send_btn = QtWidgets.QPushButton("ОТПРАВИТЬ ОТВЕТ")
         self.send_btn.setObjectName("SendBtn")
         self.send_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.send_btn.setMinimumHeight(50)
 
-        # Добавляем в лайаут (убрали кнопку отмены!)
         bottom_layout.addLayout(mic_layout, stretch=1)
         bottom_layout.addWidget(self.send_btn, stretch=3)
 
         layout.addLayout(bottom_layout)
 
-        # Логика
         self.send_btn.clicked.connect(self.accept)
         self.mic_btn.clicked.connect(self.start_listen)
 
@@ -239,10 +227,6 @@ class VoiceInputDialog(QtWidgets.QDialog):
     def get_text(self):
         return self.text_input.toPlainText()
 
-
-# ==========================================
-# 2.5 КАСТОМНЫЕ ДИАЛОГИ (ДЛЯ ТЕМЫ И ОППОНЕНТА)
-# ==========================================
 
 class CustomConfirmDialog(QtWidgets.QDialog):
     def __init__(self, parent=None, topic=""):
@@ -307,8 +291,7 @@ class OpponentSelectionDialog(QtWidgets.QDialog):
         super().__init__(parent)
         self.setModal(True)
         self.setFixedSize(450, 300)
-        
-        # Убираем системную рамку
+
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Dialog)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         
@@ -388,9 +371,7 @@ class OpponentSelectionDialog(QtWidgets.QDialog):
     def get_selected(self):
         return self.combo.currentText()
 
-# ==========================================
-# 2.6 КАСТОМНЫЙ ДИАЛОГ УСПЕХА
-# ==========================================
+
 class CustomSuccessDialog(QtWidgets.QDialog):
     def __init__(self, message_text, parent=None):
         super().__init__(parent)
@@ -477,10 +458,6 @@ class CustomSuccessDialog(QtWidgets.QDialog):
             self.move(parent_geo.center() - self.rect().center())
         super().showEvent(event)
 
-
-# ==========================================
-# 3. ЭКРАН АВТОРИЗАЦИИ
-# ==========================================
 class AuthScreen(QtWidgets.QWidget):
     login_requested = Signal(str, str)
     register_requested = Signal(str, str, str)
@@ -508,10 +485,10 @@ class AuthScreen(QtWidgets.QWidget):
         self.auth_container.setStyleSheet("QFrame { background-color: rgba(20, 20, 30, 240); border-radius: 15px; border: 2px solid #a67c00; }")
         
         vbox = QtWidgets.QVBoxLayout(self.auth_container)
-        vbox.setContentsMargins(30, 20, 30, 30) # Сверху уменьшил, но добавим спейсер ниже
+        vbox.setContentsMargins(30, 20, 30, 30) 
         vbox.setSpacing(10)
         
-        # Спейсер сверху для гибкой настройки отступа надписи
+
         self.top_spacer = vbox.addSpacing(10) 
         
         
@@ -566,7 +543,7 @@ class AuthScreen(QtWidgets.QWidget):
             self.mode = "register"
             self.auth_container.setFixedSize(400, 380)
             self.title_lbl.setText("РЕГИСТРАЦИЯ")
-            vbox.setContentsMargins(30, 40, 30, 30) # ТУТ: отступ сверху (40) для Регистрации
+            vbox.setContentsMargins(30, 40, 30, 30) 
             self.action_btn.setText("ЗАРЕГИСТРИРОВАТЬСЯ")
             self.toggle_btn.setText("Уже есть аккаунт? Войти")
             self.nick_input.show()
@@ -574,7 +551,7 @@ class AuthScreen(QtWidgets.QWidget):
             self.mode = "login"
             self.auth_container.setFixedSize(400, 310)
             self.title_lbl.setText("ВХОД")
-            vbox.setContentsMargins(30, 20, 30, 30) # ТУТ: отступ сверху (20) для Входа
+            vbox.setContentsMargins(30, 20, 30, 30) 
             self.action_btn.setText("ВОЙТИ")
             self.toggle_btn.setText("Нет аккаунта? Зарегистрируйтесь")
             self.nick_input.hide()
@@ -600,9 +577,6 @@ class AuthScreen(QtWidgets.QWidget):
     def show_error(self, msg):
         self.error_lbl.setText(msg)
 
-# ==========================================
-# 4. ЭКРАН ПРОФИЛЯ
-# ==========================================
 class ProfileScreen(QtWidgets.QWidget):
     back_requested = Signal()
 
@@ -644,7 +618,7 @@ class ProfileScreen(QtWidgets.QWidget):
         
         # HEADER ПРОФИЛЯ
         header_frame = QtWidgets.QFrame()
-        header_frame.setFixedSize(846, 70) # Чуть уже контейнера из-за border
+        header_frame.setFixedSize(846, 70) 
         header_frame.setStyleSheet("""
             QFrame { 
                 background-color: #1e1e2e; 
@@ -658,7 +632,7 @@ class ProfileScreen(QtWidgets.QWidget):
         self.title_lbl = QtWidgets.QLabel("ПРОФИЛЬ ИГРОКА")
         self.title_lbl.setProperty("class", "title")
         self.title_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.title_lbl.setStyleSheet("margin-bottom: 0px; font-size: 28px;") # Тюнинг для хедера
+        self.title_lbl.setStyleSheet("margin-bottom: 0px; font-size: 28px;")
         header_layout.addWidget(self.title_lbl)
         
         modal_layout.addWidget(header_frame)
@@ -757,9 +731,7 @@ class ProfileScreen(QtWidgets.QWidget):
         self.cards["words"].setText(str(profile.get('total_words_spoken', 0)))
         self.cards["chars"].setText(str(profile.get('total_chars_spoken', 0)))
 
-# ==========================================
-# 5. ТУТОРИАЛ (ИНТЕРАКТИВНОЕ ОБУЧЕНИЕ)
-# ==========================================
+
 class TutorialOverlayWidget(QtWidgets.QWidget):
     tutorial_finished = Signal()
 
@@ -767,8 +739,7 @@ class TutorialOverlayWidget(QtWidgets.QWidget):
         super().__init__(parent)
         self.steps = steps or []
         self.current_step = 0
-        
-        # Виджет на весь экран поверх всего
+
         if parent:
             self.resize(parent.size())
             
@@ -818,7 +789,6 @@ class TutorialOverlayWidget(QtWidgets.QWidget):
             
         step = self.steps[self.current_step]
         
-        # Выполняем экшен (например, показать скрытый попап) если он есть
         action = step.get("action")
         if action and callable(action):
             action()
@@ -832,8 +802,8 @@ class TutorialOverlayWidget(QtWidgets.QWidget):
             
         self.info_box.adjustSize()
         self.position_info_box(step)
-        self.info_box.raise_() # Поднимаем инфо-бокс поверх всего, включая VoiceInputDialog
-        self.update() # Вызов paintEvent
+        self.info_box.raise_() 
+        self.update() 
 
     def next_step(self):
         self.current_step += 1
@@ -844,7 +814,6 @@ class TutorialOverlayWidget(QtWidgets.QWidget):
         self.tutorial_finished.emit()
 
     def mousePressEvent(self, event):
-        # Позволяем переключать шаги кликом в любое место
         self.next_step()
 
     def position_info_box(self, step):
@@ -852,19 +821,16 @@ class TutorialOverlayWidget(QtWidgets.QWidget):
         direction = step.get("direction", "bottom")
         
         if not target or not target.isVisible():
-            # Если нет виджета, центрируем окошко
             self.info_box.move((self.width() - self.info_box.width()) // 2, (self.height() - self.info_box.height()) // 2)
             self.info_box.show()
             return
 
-        # Находим координаты виджета относительно главного окна
         target_pos = target.mapToGlobal(QtCore.QPoint(0, 0))
         overlay_pos = self.mapFromGlobal(target_pos)
         
         tw, th = target.width(), target.height()
         iw, ih = self.info_box.width(), self.info_box.height()
         
-        # Расчет позиций
         x, y = overlay_pos.x(), overlay_pos.y()
         offset = 20
         
@@ -882,8 +848,7 @@ class TutorialOverlayWidget(QtWidgets.QWidget):
             iy = y + (th - ih) // 2
         else:
             ix, iy = x, y
-            
-        # Защита от выхода за экран
+
         ix = max(10, min(ix, self.width() - iw - 10))
         iy = max(10, min(iy, self.height() - ih - 10))
         
@@ -894,7 +859,6 @@ class TutorialOverlayWidget(QtWidgets.QWidget):
         painter = QtGui.QPainter(self)
         painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
         
-        # Определяем основной путь на весь экран
         path = QtGui.QPainterPath()
         path.addRect(QtCore.QRectF(self.rect()))
         
@@ -904,7 +868,6 @@ class TutorialOverlayWidget(QtWidgets.QWidget):
             step = self.steps[self.current_step]
             target = step.get("widget")
             
-            # Если есть целевой виджет, вырезаем из пути дырку
             if target and target.isVisible():
                 target_pos = target.mapToGlobal(QtCore.QPoint(0, 0))
                 overlay_pos = self.mapFromGlobal(target_pos)
@@ -924,15 +887,12 @@ class TutorialOverlayWidget(QtWidgets.QWidget):
                 
                 hole_rect = QtCore.QRectF(x - pad, y - pad, width + 2*pad, height + 2*pad)
                 
-                # Создаем путь для дырки и вычитаем его из основного пути
                 hole_path = QtGui.QPainterPath()
                 hole_path.addRoundedRect(hole_rect, 10, 10)
                 path = path.subtracted(hole_path)
 
-        # 1. Заливаем полученный "дырявый" путь полупрозрачным черным
         painter.fillPath(path, QtGui.QColor(0, 0, 0, 180))
         
-        # 2. Рисуем золотую рамку вокруг дырки, если она есть
         if hole_rect:
             pen = QtGui.QPen(QtGui.QColor("#d4af37"))
             pen.setWidth(3)
@@ -940,13 +900,10 @@ class TutorialOverlayWidget(QtWidgets.QWidget):
             painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.drawRoundedRect(hole_rect, 10, 10)
 
-# ==========================================
-# 6. ЭКРАН МАГАЗИНА
-# ==========================================
 class ShopScreen(QtWidgets.QWidget):
     back_requested = Signal()
-    buy_requested = Signal(str, int) # opponent_name, price
-    details_requested = Signal(str) # opponent_name
+    buy_requested = Signal(str, int) 
+    details_requested = Signal(str) 
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -971,7 +928,7 @@ class ShopScreen(QtWidgets.QWidget):
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
         
-        # State
+
         self.current_category = "Все"
         
         # TOP BAR
@@ -1074,8 +1031,6 @@ class ShopScreen(QtWidgets.QWidget):
         main_layout.addLayout(content_vbox)
 
 
-        
-        # Каталог магазина берем из philosophers_data
         self.catalog = PHILOSOPHERS_DATA
         self.coins = 0
         self.unlocked_list = []
@@ -1094,7 +1049,7 @@ class ShopScreen(QtWidgets.QWidget):
         self.unlocked_list = unlocked_list
         self.balance_lbl.setText(f"Ваш баланс: {coins} аргуконов")
         
-        # Очистка сетки
+
         while self.grid.count():
             child = self.grid.takeAt(0)
             if child.widget():
@@ -1148,7 +1103,7 @@ class ShopScreen(QtWidgets.QWidget):
                 buy_btn.clicked.connect(lambda checked=False, n=name, p=data['price']: self.buy_requested.emit(n, p))
             
             bio_btn = QtWidgets.QPushButton("БИОГРАФИЯ")
-            bio_btn.setProperty("class", "back") # Имитируем стиль кнопки "Назад" (прозрачный + бордер)
+            bio_btn.setProperty("class", "back") 
             bio_btn.setCursor(Qt.CursorShape.PointingHandCursor)
             bio_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
             bio_btn.clicked.connect(lambda checked=False, n=name: self.details_requested.emit(n))
@@ -1164,14 +1119,11 @@ class ShopScreen(QtWidgets.QWidget):
             
             self.grid.addWidget(card, row, col)
             col += 1
-            # Adjust column count based on available space if desired, sticking to 2-3 looks good
             if col > 1:
                 col = 0
                 row += 1
 
-# ==========================================
-# 5.5. ЭКРАН ДЕТАЛЕЙ ФИЛОСОФА (БИОГРАФИЯ)
-# ==========================================
+
 class PhilosopherDetailsScreen(QtWidgets.QWidget):
     back_requested = Signal()
 
@@ -1196,7 +1148,6 @@ class PhilosopherDetailsScreen(QtWidgets.QWidget):
         main_layout.setContentsMargins(40, 40, 40, 40)
         main_layout.setSpacing(40)
 
-        # Левая колонка - Картинка и кнопка Назад
         left_layout = QtWidgets.QVBoxLayout()
         left_layout.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter)
         
@@ -1216,7 +1167,6 @@ class PhilosopherDetailsScreen(QtWidgets.QWidget):
         left_layout.addWidget(self.back_btn)
         left_layout.addStretch()
 
-        # Правая колонка - Текст
         scroll_area = QtWidgets.QScrollArea()
         scroll_area.setWidgetResizable(True)
         scroll_area.setStyleSheet("QScrollArea { border: none; background: transparent; } QWidget#scroll_content { background: transparent; }")
@@ -1268,17 +1218,15 @@ class PhilosopherDetailsScreen(QtWidgets.QWidget):
 
         scroll_area.setWidget(scroll_content)
 
-        main_layout.addLayout(left_layout, 1) # Картинка занимает 1 долю ширины
-        main_layout.addWidget(scroll_area, 2) # Текст занимает 2 доли ширины
+        main_layout.addLayout(left_layout, 1) 
+        main_layout.addWidget(scroll_area, 2) 
         
     def load_philosopher(self, name):
         data = PHILOSOPHERS_DATA.get(name)
         if not data: return
         
-        # Обновляем картинку
         pixmap = QtGui.QPixmap(data["img"])
         if not pixmap.isNull():
-            # Заполняем область метки, сохраняя пропорции, можно также обрезать
             scaled = pixmap.scaled(350, 450, Qt.AspectRatioMode.KeepAspectRatioByExpanding, Qt.TransformationMode.SmoothTransformation)
             self.img_lbl.setPixmap(scaled)
             
@@ -1294,9 +1242,6 @@ class PhilosopherDetailsScreen(QtWidgets.QWidget):
         
         self.quote_lbl.setText(f"«{data['quote']}»")
 
-# ==========================================
-# 6. ГЛАВНЫЙ КОНТРОЛЛЕР
-# ==========================================
 class AppController(QtWidgets.QMainWindow):
     request_generation = Signal(str, object, dict)
     request_speak = Signal(list)
@@ -1377,7 +1322,6 @@ class AppController(QtWidgets.QMainWindow):
         self.setWindowTitle("Интеллектуальный Гладиатор")
         self.resize(self.base_size)
         self.center_window()
-        # Запрещаем ручное изменение размера и кнопку разворота
         self.setFixedSize(self.base_size)
 
     def setup_threads_and_workers(self):
@@ -1403,7 +1347,6 @@ class AppController(QtWidgets.QMainWindow):
         self.speaker_thread.start()
 
     def _set_voice_for_speaker(self, speaker_name):
-        # Default fallback is male DmitryNeural, Moderator can use Svetlana.
         voice_id = "ru-RU-SvetlanaNeural" if speaker_name == "Модератор" else "ru-RU-DmitryNeural"
         rate = "-15%"
         pitch = "+0Hz"
@@ -1630,7 +1573,7 @@ class AppController(QtWidgets.QMainWindow):
         """Асинхронно предзагружает тяжелые ML модели, чтобы избежать зависаний перед дебатами"""
         print("PRELOAD: Начинаю фоновую загрузку моделей...")
         try:
-            # DeepSeek клиент уже инициализирован в __init__
+
             print("PRELOAD: DeepSeek клиент готов.")
             
             from rag_retriever import get_chroma_client, get_embedding_function
@@ -1666,7 +1609,7 @@ class AppController(QtWidgets.QMainWindow):
     def handle_register(self, email, nickname, pwd):
         ok, result = self.db.register_user(email, nickname, pwd)
         if ok:
-            self.handle_login(email, pwd) # Автологин
+            self.handle_login(email, pwd) 
         else:
             self.auth_screen.show_error(result)
 
@@ -1700,7 +1643,7 @@ class AppController(QtWidgets.QMainWindow):
                 dialog = CustomSuccessDialog(f"{name} теперь доступен в дебатах!", self)
                 dialog.exec()
                 self.update_main_menu_info()
-                self.go_to_shop() # Перерисовка магазина (кнопки КУПИТЬ -> РАЗБЛОКИРОВАНО)
+                self.go_to_shop() 
             else:
                 QtWidgets.QMessageBox.warning(self, "Ошибка", msg)
 
@@ -1711,18 +1654,15 @@ class AppController(QtWidgets.QMainWindow):
 
     @QtCore.Slot()
     def start_tutorial(self):
-        # Переключаемся на экран дебатов для туториала
         self.stacked_widget.setCurrentWidget(self.debate_screen)
         
-        # Настраиваем фейковые данные для туториала
         self.debate_screen.topic.setText(" ТЕМА: В чём смысл жизни?")
         self.debate_screen.user.setText(self.current_user['nickname'] if self.current_user else "ИГРОК")
         
-        # Загружаем Изображение Сократа, а не текст (иначе затрет картинку)
         self.debate_screen.opp.setText("")
         socrates_pixmap = QtGui.QPixmap("assets/socrates.png")
         if socrates_pixmap.isNull():
-             # Fallback if resources.qrc is not used or path differs
+     
              socrates_pixmap = QtGui.QPixmap("assets/resized-socrates.png")
         if not socrates_pixmap.isNull():
              self.debate_screen.opp.setPixmap(socrates_pixmap)
@@ -1730,12 +1670,10 @@ class AppController(QtWidgets.QMainWindow):
         self.update_subtitles("Приветствую на Арене Разума! Я Сократ, и мы начинаем наши дебаты.")
         self.update_speaker_name("Сократ")
         
-        # Чтобы диалог ввода можно было подсветить, нужно его создать
-        # Для туториала передаем is_tutorial=True (он будет прозрачен для кликов)
+
         self.tutorial_input_dialog = VoiceInputDialog(self.debate_screen, "Ваш ход", "Введите аргумент:", is_tutorial=True)
-        # Важно: переместим его в удобное место поверх debate_screen
+
         self.tutorial_input_dialog.move((self.width() - 600) // 2, self.height() - 250)
-        # СКРЫВАЕМ его до тех пор, пока мы не дойдем до шага с вводом
         self.tutorial_input_dialog.hide()
 
         steps = [
@@ -1773,7 +1711,7 @@ class AppController(QtWidgets.QMainWindow):
                 "widget": self.tutorial_input_dialog.text_input,
                 "text": "<b>Ваше оружие.</b><br><br>Введите сюда свой аргумент или контраргумент. Постарайтесь быть лаконичным и убедительным.",
                 "direction": "top",
-                "action": lambda: self.tutorial_input_dialog.show() # Показываем диалог
+                "action": lambda: self.tutorial_input_dialog.show() 
             },
             {
                 "widget": self.tutorial_input_dialog.mic_btn,
@@ -1801,7 +1739,7 @@ class AppController(QtWidgets.QMainWindow):
             self.tutorial_overlay.deleteLater()
             self.tutorial_overlay = None
             
-        # Очищаем поле сабов
+  
         self.update_subtitles("")
         self.update_speaker_name("")
         self.debate_screen.topic.setText("")
@@ -1810,7 +1748,6 @@ class AppController(QtWidgets.QMainWindow):
     # --- МЕТОД ВЫЗОВА ОКНА ---
     def get_user_input(self, title, label):
         dialog = VoiceInputDialog(self, title, label)
-        # Смещаем диалог ниже центра
         rect = self.geometry()
         x = rect.x() + (rect.width() - dialog.width()) // 2
         y = rect.y() + int(rect.height() * 0.5)
@@ -1827,7 +1764,7 @@ class AppController(QtWidgets.QMainWindow):
 
     @QtCore.Slot(int)
     def on_mode_changed(self, index):
-        if index == 1: # Критика
+        if index == 1: 
             self.file_upload_wrapper.show()
             self.topic_input.setPlaceholderText("Введите ваш тезис или загрузите файл с текстом работы...")
         else:
@@ -1875,7 +1812,6 @@ class AppController(QtWidgets.QMainWindow):
             topic_label = raw_topic if raw_topic else "Защита научной работы"
             if len(topic_label) > 50: topic_label = topic_label[:50] + "..."
             
-            # Пропускаем стандартного оппонента, используем Рецензента
             file_name = "assets/science.png"
             pixmap = QtGui.QPixmap(file_name)
             if pixmap.isNull():
@@ -1901,7 +1837,6 @@ class AppController(QtWidgets.QMainWindow):
             self.confirm_start_btn.setEnabled(False)
             QtWidgets.QApplication.processEvents()
 
-            # Запускаем AI-форматирование через DeepSeek в отдельном потоке
             self._formatter_thread = TopicFormatterThread(raw_topic, self.deepseek, parent=self)
             self._formatter_thread.topic_ready.connect(self._continue_debate_setup)
             self._formatter_thread.start()
@@ -1919,7 +1854,6 @@ class AppController(QtWidgets.QMainWindow):
 
         dialog = CustomConfirmDialog(self, formatted_topic)
         if dialog.exec():
-            # Пользователь подтвердил тему, выбираем оппонента
             topic = formatted_topic
             unlocked_opps = self.db.get_unlocked_opponents(self.current_user['id']) if self.current_user else list(self.AVATAR_MAP.keys())
             available_opps = [opp for opp in self.AVATAR_MAP.keys() if opp in unlocked_opps]
@@ -1938,7 +1872,6 @@ class AppController(QtWidgets.QMainWindow):
             self.debate_screen.opp.setPixmap(pixmap)
             self.debate_screen.opp.setScaledContents(True)
 
-            # Пользовательский аватар
             user_pixmap = QtGui.QPixmap("assets/user_avatar_no_bg.png")
             if not user_pixmap.isNull():
                 self.debate_screen.user.setPixmap(user_pixmap)
@@ -1947,12 +1880,10 @@ class AppController(QtWidgets.QMainWindow):
             # Запуск дебатов
             self._finalize_debate_start(topic, opponent_name)
         else:
-            # Пользователь отказался, просим уточнение
             feedback = self.get_user_input("Уточнение", "Что именно нужно изменить в теме?")
             if not feedback: 
                 return
             
-            # Повторный цикл с учетом фидбека
             self.confirm_start_btn.setText("Переписываю...")
             self.confirm_start_btn.setEnabled(False)
             QtWidgets.QApplication.processEvents()
@@ -1966,11 +1897,10 @@ class AppController(QtWidgets.QMainWindow):
         self.stacked_widget.setCurrentWidget(self.debate_screen)
 
         self.opp_system_prompt = get_opponent_system_prompt(topic, opponent_name)
-        self.deepseek.reset_stats()  # Сбрасываем счетчики перед новой игрой
+        self.deepseek.reset_stats()  
         user_name = self.current_user['nickname'] if self.current_user else "Вы"
         self.engine = DebateManager(topic, user_name, opponent_name)
         
-        # Включаем музыку дебатов
         self.play_music("Clockwork Focus.mp3")
 
         if hasattr(self.debate_screen, 'subtitletopicLabel'):
@@ -2085,14 +2015,12 @@ class AppController(QtWidgets.QMainWindow):
     def _handle_participant_speech(self, participant_name):
         if participant_name == self.engine.user_name:
             if hasattr(self, 'critique_full_text') and self.critique_full_text and self.engine.opponent_name == "Академический Рецензент":
-                # Авто-инжект в режиме критики, чтобы пользователь не вводил текст вторично
                 text = "Я готов защищать свою работу. Ознакомьтесь с ней, пожалуйста. Вот текст:\n\n" + self.critique_full_text
                 self.engine._add_to_transcript(self.engine.user_name, text)
                 self.update_speaker_name(self.engine.user_name)
                 self.update_subtitles("Я готов защищать свою работу. Ознакомьтесь с ней, пожалуйста.")
                 self.last_user_speech = text
-                
-                # Очищаем чтобы не использовать повторно
+
                 self.critique_full_text = None 
                 
                 QtCore.QTimer.singleShot(2000, self.process_next_action)
@@ -2110,13 +2038,12 @@ class AppController(QtWidgets.QMainWindow):
                 prompt = self.engine.get_critique_prompt()
             else:
                 raw_prompt = self.engine.get_opponent_opening_prompt(self.last_user_speech)
-                # --- HYBRID RAG INJECTION BEGIN ---
                 print("[RAG] Извлекаем контекст для философа...")
                 rag_memory = get_philosopher_context(self.engine.opponent_name, self.last_user_speech, top_k=3)
                 if hasattr(self, 'deepseek'):
                     self.deepseek.log_rag_citation(rag_memory)
                 prompt = raw_prompt + f"\n\n[СПРАВОЧНАЯ ИНФОРМАЦИЯ ИЗ ТВОИХ ТРУДОВ]\n(Используй эти данные мягко и органично, только если они релевантны. Не цитируй дословно, если это вредит естественности диалога. Сохраняй свой живой характер.)\nКонтекст:\n{rag_memory}\n[КОНЕЦ ИНФОРМАЦИИ]"
-                # --- HYBRID RAG INJECTION END ---
+
                 
             self._set_voice_for_speaker(self.engine.opponent_name)
             self.request_stream_start.emit()
@@ -2143,7 +2070,6 @@ class AppController(QtWidgets.QMainWindow):
             
         if callback == 'handle_jury_questions':
             try:
-                # Надежное извлечение JSON
                 clean = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL)
                 start_idx = clean.find('{')
                 end_idx = clean.rfind('}')
@@ -2172,23 +2098,18 @@ class AppController(QtWidgets.QMainWindow):
 
                 is_3m = metadata.get('is_3m', False)
                 
-                # --- НАДЕЖНАЯ ПРОВЕРКА ПОБЕДИТЕЛЯ ---
+
                 winner_name = str(self.verdict_data.get('winner', 'Ничья')).strip().lower()
                 opp_name_lower = self.engine.opponent_name.lower()
                 
-                # Проверяем "от противного": 
-                # Если имя оппонента есть в строке победителя — мы проиграли
                 if opp_name_lower in winner_name:
                     is_user_win = False
-                # Если в строке слово ничья/draw — это не победа
                 elif "ничья" in winner_name or "draw" in winner_name:
                     is_user_win = False
                 else:
-                    # Во всех остальных случаях (Пользователь, Игрок, Имя игрока) - победил юзер!
                     is_user_win = True
                 # ------------------------------------
 
-                # Сохраняем статистику в базу данных
                 if self.current_user and self.engine:
                     playtime = 300 
                     words = 200
@@ -2279,7 +2200,6 @@ class AppController(QtWidgets.QMainWindow):
             self.verdict_announcement_step = 'RAG_CITATIONS'
             return
 
-        # --- 3M SEQUENCE ---
         if self.verdict_announcement_step == 'SCORES_MATTER':
             u = self.verdict_data.get('user_scores', {}).get('matter', 0)
             o = self.verdict_data.get('opponent_scores', {}).get('matter', 0)
@@ -2347,9 +2267,7 @@ class AppController(QtWidgets.QMainWindow):
                 citations_text = "\n\n".join(self.deepseek.rag_citations)
                 self.engine._add_to_transcript("Система", f"Использованные материалы RAG:\n{citations_text}")
                 self.update_speaker_name("Система")
-                # Эмитим текст для субтитров и очень краткую озвучку
                 self.request_speak.emit(["К результатам прикреплены материалы, найденные в базе знаний."])
-                # Дополнительно выводим текст в субтитры
                 self.update_subtitles(f"Использованные материалы RAG:\n{citations_text[:250]}...")
             else:
                 self.process_next_action()
@@ -2373,7 +2291,7 @@ class AppController(QtWidgets.QMainWindow):
             self.state = "DEBATE_FLOW"
             is_critique = (self.engine.opponent_name == "Академический Рецензент")
             
-            # --- HYBRID RAG JURY INJECTION BEGIN ---
+    
             print("[RAG Jury] Проверяем факты участников...")
             recent_claims = " ".join(self.engine.transcript[-4:])
             search_query = f"проверка фактов {recent_claims[:100]}"
@@ -2387,7 +2305,7 @@ class AppController(QtWidgets.QMainWindow):
                 raw_prompt = self.engine.get_3m_verdict_prompt()
                 
             prompt = raw_prompt + f"\n\n[БЛОК ПРОВЕРКИ ФАКТОВ В СЕТИ — GROUND TRUTH]\nРезультаты онлайн-поиска (учитывай их при выставлении баллов за Matter):\n{jury_facts}\n[КОНЕЦ БЛОКА ПРОВЕРКИ ФАКТОВ]"
-            # --- HYBRID RAG JURY INJECTION END ---
+     
 
             self.request_generation.emit(prompt, None, {
                 'speaker_name': 'Жюри', 
@@ -2436,11 +2354,11 @@ class AppController(QtWidgets.QMainWindow):
             else:
                 raw_prompt = self.engine.get_clash_responder_prompt(self.last_clash_speech)
                 
-            # --- HYBRID RAG INJECTION BEGIN ---
+     
             print(f"[RAG Clash] Извлекаем контекст для: {self.current_clash_turn_holder}")
             rag_memory = get_philosopher_context(self.current_clash_turn_holder, self.last_clash_speech, top_k=2)
             prompt =  f"\n\n[СПРАВОЧНАЯ ИНФОРМАЦИЯ ИЗ ТВОИХ ТРУДОВ]\n(Используй эти данные мягко и органично, только если они релевантны. Не цитируй дословно, если это вредит естественности диалога. Сохраняй свой живой характер. О)\nКонтекст:\n{rag_memory}\n[КОНЕЦ ИНФОРМАЦИИ И не забывай что задавать тебе вопрос или отвечать не на жти цитаты, а на позицию игрока!!!  Она дальше вот идёт]" + raw_prompt
-            # --- HYBRID RAG INJECTION END ---
+        
 
             self._set_voice_for_speaker(self.current_clash_turn_holder)
             self.request_stream_start.emit()
@@ -2504,7 +2422,6 @@ class AppController(QtWidgets.QMainWindow):
         self.state = "IDLE"
         self.update_speaker_name("Система")
         self.debate_screen.subtitleLabel.setText("Дебаты завершены!")
-        # Выводим статистику токенов за раунд
         self.deepseek.print_game_stats()
         self.show_post_debate_screen(getattr(self, 'is_user_win', False), getattr(self, 'coins_reward', 0))
 
@@ -2608,7 +2525,7 @@ class AppController(QtWidgets.QMainWindow):
                 new_width = int(w * 0.9)
                 widget.setFixedSize(new_width, int(h * 0.15))
                 widget.setWordWrap(True)
-                widget.setAlignment(Qt.AlignmentFlag.AlignCenter) # Обязательно выравниваем по центру при ресайзе
+                widget.setAlignment(Qt.AlignmentFlag.AlignCenter) 
                 widget.move((w - new_width) // 2, int(h * 0.05))
                 text_len = len(widget.text())
                 base_font = 34 if self.isFullScreen() else 26
@@ -2643,25 +2560,21 @@ class AppController(QtWidgets.QMainWindow):
 
     def toggle_fullscreen(self):
         if self.isFullScreen():
-            # Возвращаем окновый режим, запираем размер обратно
             self.setMinimumSize(0, 0)
             self.setMaximumSize(16777215, 16777215)
             self.showNormal()
             self.setFixedSize(self.base_size)
             self.center_window()
         else:
-            # Снимаем блокировку размера и выходим в полный экран
             self.setMinimumSize(0, 0)
             self.setMaximumSize(16777215, 16777215)
             self.showFullScreen()
 
     def resize_main_menu_widgets(self):
-        """Re-positions main menu buttons proportionally when window is resized/fullscreened."""
         w, h = self.main_menu.width(), self.main_menu.height()
         base_w, base_h = self.base_size.width(), self.base_size.height()
         scale = min(w / base_w, h / base_h)
 
-        # Кнопки — в fullscreen чуть крупнее (+2.5%)
         btn_scale = scale * 1.025 if self.isFullScreen() else scale
         btn_w = int(280 * btn_scale)
         btn_h = int(65 * btn_scale)
@@ -2674,7 +2587,6 @@ class AppController(QtWidgets.QMainWindow):
         self.profile_btn.setGeometry(center_x, start_y + 2 * (btn_h + spacing), btn_w, btn_h)
         self.tutorial_btn.setGeometry(center_x, start_y + 3 * (btn_h + spacing), btn_w, btn_h)
 
-        # Шрифт кнопок — в fullscreen дополнительный бонус +8%
         font_scale = scale * 1.08 if self.isFullScreen() else scale
         btn_font_size = int(18 * font_scale)
         btn_style = f"""
@@ -2691,12 +2603,10 @@ class AppController(QtWidgets.QMainWindow):
                     self.profile_btn, self.tutorial_btn]:
             btn.setStyleSheet(btn_style)
 
-        # Баланс — правый верхний угол
         info_w = int(400 * scale)
         self.user_info_lbl.setGeometry(w - info_w - 20, 20, info_w, int(40 * scale))
         self.user_info_lbl.setStyleSheet(f"font-size: {int(20 * scale)}px; color: white; font-weight: bold; background: transparent;")
 
-        # Заголовок тоже перецентруем
         for label in self.main_menu.findChildren(QtWidgets.QLabel):
             if "ГЛАДИАТОР" in label.text() or "ИНТЕЛЛЕКТУАЛЬНЫЙ" in label.text():
                 lbl_w = min(int(600 * scale), int(w * 0.75))
@@ -2730,7 +2640,6 @@ class ClickSoundFilter(QtCore.QObject):
         if event.type() == QtCore.QEvent.Type.MouseButtonPress:
             from PySide6.QtWidgets import QAbstractButton, QComboBox
             if getattr(obj, "isEnabled", lambda: False)():
-                # Проигрываем звук, если кликаем по кнопке или выпадашке (но не по полю ввода)
                 if isinstance(obj, (QAbstractButton, QComboBox)):
                     self.sound.play()
         return False
@@ -2738,7 +2647,6 @@ class ClickSoundFilter(QtCore.QObject):
 if __name__ == "__main__":
     app = QtWidgets.QApplication(sys.argv)
     
-    # Глобальный перехватчик кликов мыши
     click_filter = ClickSoundFilter()
     app.installEventFilter(click_filter)
     

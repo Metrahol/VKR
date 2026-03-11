@@ -11,7 +11,6 @@ def generate_debate_report(transcript_lines, topic, winner, filepath="debate_rep
     Генерирует PDF-отчет со стенограммой дебатов с помощью ReportLab.
     Использует шрифты DejaVu для поддержки кириллицы.
     """
-    # Регистрируем шрифты
     font_path = "C:\\Windows\\Fonts\\calibri.ttf"
     font_bold_path = "C:\\Windows\\Fonts\\calibrib.ttf"
     
@@ -24,11 +23,9 @@ def generate_debate_report(transcript_lines, topic, winner, filepath="debate_rep
     font_regular = 'Calibri' if has_fonts else 'Helvetica'
     font_bold = 'Calibri-Bold' if has_fonts else 'Helvetica-Bold'
     
-    # Настройка документа
     doc = SimpleDocTemplate(filepath, pagesize=letter)
     styles = getSampleStyleSheet()
     
-    # Кастомные стили
     style_title = ParagraphStyle(
         name='TitleStyle',
         parent=styles['Heading1'],
@@ -83,10 +80,8 @@ def generate_debate_report(transcript_lines, topic, winner, filepath="debate_rep
         if not clean_line:
             continue
         
-        # Экранируем спецсимволы для HTML-подобной разметки ReportLab
         clean_line = clean_line.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
         
-        # Делаем имена спикеров жирными (например, [Артём]: текст)
         if clean_line.startswith('['):
             parts = clean_line.split(']', 1)
             if len(parts) == 2:
@@ -96,6 +91,5 @@ def generate_debate_report(transcript_lines, topic, winner, filepath="debate_rep
                 
         story.append(Paragraph(clean_line, style_body))
         
-    # Собираем документ
     doc.build(story)
     return filepath

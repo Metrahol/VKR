@@ -15,7 +15,7 @@ class DebateManager:
     def _add_to_transcript(self, speaker, text):
         line = f"[{speaker}]: {text}"
         self.transcript.append(line)
-        print(f"TRANSCRIPT: {line}") # Добавим логгирование для отладки
+        print(f"TRANSCRIPT: {line}") 
 
     def get_setup_prompt(self):
         self._add_to_transcript("СИСТЕМА", f"Тема дебатов: {self.topic}")
@@ -30,7 +30,7 @@ class DebateManager:
         return f"[ИНСТРУКЦИЯ]: {instruction}\n[РЕЧЬ ОППОНЕНТА]: {user_speech}"
 
     def get_critique_prompt(self):
-        transcript_str = "\n".join(self.transcript[-6:]) # Последние 6 реплик для контекста
+        transcript_str = "\n".join(self.transcript[-6:]) 
         instruction = "Ты Академический Рецензент. Опираясь на СВОИ ПРАВИЛА, изучи историю общения и задай свой СЛЕДУЮЩИЙ каверзный вопрос."
         return f"[ИНСТРУКЦИЯ]: {instruction}\n\n[ИСТОРИЯ ОБСУЖДЕНИЯ]:\n{transcript_str}"
 
@@ -67,7 +67,6 @@ class DebateManager:
             return ""
 
     def get_final_verdict_prompt(self):
-        # --- ИСПРАВЛЕНИЕ 4: Усиленный промпт для вердикта ---
         transcript_str = "\n".join(self.transcript)
         return f"""
         ЗАБУДЬ ВСЕ ЧТО БЫЛО ДО. Проанализируй следующую стенограмму дебатов и вынеси свой вердикт.

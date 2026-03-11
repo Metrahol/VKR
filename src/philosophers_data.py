@@ -1,5 +1,3 @@
-# philosophers_data.py
-
 PHILOSOPHERS_DATA = {
     "Иммануил Кант": {
         "name": "Иммануил Кант",
@@ -12,11 +10,11 @@ PHILOSOPHERS_DATA = {
         ],
         "quote": "Две вещи наполняют душу всегда новым и все более сильным удивлением и благоговением <...>: звездное небо надо мной и моральный закон во мне.",
         "img": "assets/resized-kant.png",
-        "price": 0,  # Бесплатный базовый персонаж
+        "price": 0, 
         "is_default": True,
         "voice": "ru-RU-DmitryNeural",
-        "pitch": "-10Hz",   # Чуть ниже обычного, солидный
-        "rate": "-5%",      # Чуть медленнее, размеренный
+        "pitch": "-10Hz",   
+        "rate": "-5%",      
         "category": "Философы"
     },
     "Сократ": {
@@ -33,7 +31,7 @@ PHILOSOPHERS_DATA = {
         "price": 100,
         "is_default": False,
         "voice": "ru-RU-DmitryNeural",
-        "pitch": "+0Hz",    # Нейтральный, ясный
+        "pitch": "+0Hz",   
         "rate": "+0%",
         "category": "Философы"
     },
@@ -52,7 +50,7 @@ PHILOSOPHERS_DATA = {
         "is_default": False,
         "voice": "ru-RU-DmitryNeural",
         "pitch": "-5Hz",    
-        "rate": "+10%",     # Чуть быстрее, экспрессивнее
+        "rate": "+10%",    
         "category": "Философы"
     },
     "Чарльз Дарвин": {
@@ -69,7 +67,7 @@ PHILOSOPHERS_DATA = {
         "price": 200,
         "is_default": False,
         "voice": "ru-RU-DmitryNeural",
-        "pitch": "-15Hz",   # Старческий, рассудительный
+        "pitch": "-15Hz",   
         "rate": "-10%",
         "category": "Ученые"
     },
@@ -87,7 +85,7 @@ PHILOSOPHERS_DATA = {
         "price": 300,
         "is_default": False,
         "voice": "ru-RU-DmitryNeural",
-        "pitch": "+5Hz",    # Энергичный, визионерский
+        "pitch": "+5Hz",    
         "rate": "+15%",
         "category": "Разное"
     },

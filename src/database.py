@@ -17,8 +17,6 @@ class DatabaseManager:
         self._init_db()
 
     def _get_connection(self):
-        # Включаем возвращение результатов в виде словарей (row_factory) 
-        # для более удобного доступа по ключам (row['coins']).
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
         return conn
@@ -72,14 +70,13 @@ class DatabaseManager:
             
             conn.commit()
 
-    # --- АВТОРИЗАЦИЯ И РЕГИСТРАЦИЯ ---
 
     def register_user(self, email, nickname, password):
         """
         Регистрирует нового пользователя. 
         Возвращает (True, user_id) при успехе или (False, error_msg) при ошибке.
         """
-        # Генерируем соль и хешируем пароль
+    
         salt = bcrypt.gensalt()
         hashed = bcrypt.hashpw(password.encode('utf-8'), salt)
         
@@ -124,10 +121,9 @@ class DatabaseManager:
             if not user:
                 return False, "Неверный email или пароль."
             
-            # Сравниваем введенный пароль с хешем в БД
             stored_hash = user['password_hash'].encode('utf-8')
             if bcrypt.checkpw(password.encode('utf-8'), stored_hash):
-                # Обновляем время последнего входа
+
                 cursor.execute(
                     "UPDATE users SET last_login = CURRENT_TIMESTAMP WHERE id = ?", 
                     (user['id'],)
@@ -137,7 +133,6 @@ class DatabaseManager:
             else:
                 return False, "Неверный email или пароль."
 
-    # --- ЭКОНОМИКА И СТАТИСТИКА ---
 
     def get_user_profile(self, user_id):
         """Возвращает полную сводку профиля пользователя (учетка + стата)."""
@@ -198,8 +193,7 @@ class DatabaseManager:
             conn.commit()
             return coins_reward
 
-    # --- МАГАЗИН ---
-    
+  
     def get_unlocked_opponents(self, user_id):
         """Возвращает список имен открытых противников."""
         with self._get_connection() as conn:
@@ -238,7 +232,6 @@ class DatabaseManager:
             conn.commit()
             return True, "Успешная покупка!"
 
-# Для быстрого локального теста из консоли:
 if __name__ == "__main__":
     db = DatabaseManager("test_vkr.db")
     print("БД и таблицы успешно созданы.")

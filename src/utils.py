@@ -1,5 +1,3 @@
-# utils.py
-
 import pyttsx3
 from PySide6 import QtCore
 
@@ -9,9 +7,7 @@ class Speaker(QtCore.QObject):
     Класс-рабочий для озвучки текста в отдельном потоке.
     Это гарантирует, что GUI никогда не будет заблокирован.
     """
-    # Сигнал, который отправляется в главный поток, когда начинается озвучка предложения.
     speech_started = QtCore.Signal(str)
-    # Сигнал, который отправляется, когда вся пачка предложений озвучена.
     sequence_finished = QtCore.Signal()
 
     def __init__(self):
@@ -38,7 +34,7 @@ class Speaker(QtCore.QObject):
         """
         if not self.tts_engine:
             print("Озвучка невозможна, движок не инициализирован.")
-            self.sequence_finished.emit()  # Сообщаем, что "закончили" (не начав)
+            self.sequence_finished.emit()  
             return
 
         self.sentences_queue = sentences
@@ -49,23 +45,18 @@ class Speaker(QtCore.QObject):
         if self.sentences_queue:
             sentence = self.sentences_queue.pop(0).strip()
             if sentence:
-                # Отправляем сигнал НАЧАЛА озвучки в главный поток
                 self.speech_started.emit(sentence)
                 try:
-                    # Эта блокирующая операция теперь безопасна, так как она в другом потоке!
                     self.tts_engine.say(sentence)
                     self.tts_engine.runAndWait()
-                    # Рекурсивно вызываем себя для следующего предложения
                     QtCore.QTimer.singleShot(50, self._speak_next_sentence)
                 except Exception as e:
                     print(f"Ошибка во время озвучки: {e}")
-                    # Все равно пытаемся продолжить или завершить
                     QtCore.QTimer.singleShot(50, self._speak_next_sentence)
 
-            else:  # Если предложение пустое, пропускаем
+            else:  
                 self._speak_next_sentence()
         else:
-            # Очередь пуста, отправляем сигнал ЗАВЕРШЕНИЯ в главный поток
             self.sequence_finished.emit()
 
     @QtCore.Slot()
@@ -77,7 +68,6 @@ class Speaker(QtCore.QObject):
             self.tts_engine.stop()
 
 
-# Функция speech_to_text остается без изменений
+
 def speech_to_text():
-    # Эта функция остается такой, какой была в твоих рабочих версиях
-    pass  # Заглушка, используй свою версию
+    pass  

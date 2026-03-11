@@ -40,7 +40,6 @@ class AgentWorker(QtCore.QObject):
                 return
 
             if not is_stream:
-                # Не-потоковая генерация
                 if role == 'moderator':
                     generated_text = ds.generate_moderator(system_prompt, prompt)
                 elif role == 'jury':
@@ -52,7 +51,6 @@ class AgentWorker(QtCore.QObject):
                 self.generation_complete.emit(generated_text, metadata)
                 return
 
-            # Потоковая генерация (только для оппонента)
             stream = ds.generate_opponent(system_prompt, prompt, stream=True)
             full_text = ""
             current_buffer = ""
@@ -61,7 +59,6 @@ class AgentWorker(QtCore.QObject):
                 full_text += text_chunk
                 current_buffer += text_chunk
 
-                # Ищем конец предложения
                 if any(p in current_buffer for p in ['. ', '! ', '? ', '\n']):
                     parts = re.split(r'(?<=[.!?\n])\s+', current_buffer)
                     for i in range(len(parts) - 1):
@@ -73,7 +70,6 @@ class AgentWorker(QtCore.QObject):
             if current_buffer.strip():
                 self.generation_chunk.emit(current_buffer.strip(), metadata)
 
-            # Убираем <think>...</think> из полного текста
             clean_text = re.sub(r'<think>.*?</think>', '', full_text, flags=re.DOTALL).strip()
 
             print(f"WORKER_AGENT: Потоковая генерация завершена за {time.time() - start_time:.2f} сек.")
@@ -84,7 +80,6 @@ class AgentWorker(QtCore.QObject):
             self.generation_complete.emit(error_message, metadata)
 
 
-# Файл workers.py
 
 class SpeakerWorker(QtCore.QObject):
     speech_started = QtCore.Signal(str)
@@ -119,19 +114,15 @@ class SpeakerWorker(QtCore.QObject):
         print("WORKER_SPEAKER (Async+Cache): Готов к работе.")
         pass
 
-    # --- НОВЫЙ МЕТОД ДЛЯ ПРЕРЫВАНИЯ РЕЧИ ---
     @QtCore.Slot()
     def stop_current_speech(self):
         """
         Принудительно останавливает текущую озвучку и очищает очередь.
         """
         print("WORKER_SPEAKER: Получен сигнал принудительной остановки.")
-        # Сигнализируем всем циклам, что нужно остановиться
         self._stop_event.set()
-        # Очищаем очереди
         while not self._text_queue.empty(): self._text_queue.get()
         while not self._playback_queue.empty(): self._playback_queue.get()
-        # Немедленно останавливаем звук, который играет прямо сейчас
         if pygame.mixer:
             pygame.mixer.stop()
 
@@ -142,8 +133,6 @@ class SpeakerWorker(QtCore.QObject):
             self._current_voice = voice_id
             self._current_rate = rate
             self._current_pitch = pitch
-
-    # --- КОНЕЦ НОВОГО МЕТОДА ---
 
     def clean_and_split(self, text_list):
         full_text = ' '.join(text_list)
@@ -297,7 +286,6 @@ class SpeakerWorker(QtCore.QObject):
             self._playback_thread.join(timeout=1.0)
         if pygame.mixer:
             pygame.mixer.quit()
-# В классе SpeakerWorker в файле workers.py
 
     def is_busy(self):
         """Проверяет, занят ли воркер озвучкой в данный момент."""

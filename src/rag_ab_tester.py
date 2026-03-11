@@ -8,10 +8,9 @@ from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
 from PySide6.QtCore import Qt, QThread, Signal
 from PySide6.QtGui import QFont
 
-# Важно: предполагается, что эти модули лежат в той же папке
+
 from rag_retriever import get_philosopher_context
 
-# Убедись, что импортируешь свои промпты из основного файла (например, из agents.py)
 from agents import BASE_OPPONENT_PROMPT, OPPONENTS_CONFIG, DeepSeekManager
 
 class Worker(QThread):
@@ -119,24 +118,20 @@ class BlindTesterApp(QMainWindow):
         self.base_wins = 0
         self.current_truth = ""
 
-        # Main Layout
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
         main_layout = QVBoxLayout(central_widget)
 
-        # Header
         header_label = QLabel("A/B Тестирование: RAG vs Base DeepSeek")
         header_label.setFont(QFont("Arial", 20, QFont.Bold))
         header_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         main_layout.addWidget(header_label)
         
-        # Stats
         self.stats_label = QLabel(f"Счетчик побед - RAG: {self.rag_wins} | Base DeepSeek: {self.base_wins}")
         self.stats_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.stats_label.setStyleSheet("color: #4CAF50; font-weight: bold;")
         main_layout.addWidget(self.stats_label)
 
-        # Controls Layout
         controls_layout = QHBoxLayout()
         
         self.philo_combo = QComboBox()
@@ -152,22 +147,18 @@ class BlindTesterApp(QMainWindow):
         
         main_layout.addLayout(controls_layout)
 
-        # Input
         main_layout.addWidget(QLabel("Ваш вопрос/тезис (User Input):"))
         self.input_box = QTextEdit()
         self.input_box.setMaximumHeight(80)
         self.input_box.setPlaceholderText("Например: В чем смысл жизни? Почему религия - это опиум для народа?")
         main_layout.addWidget(self.input_box)
 
-        # Generate Button
         self.gen_btn = QPushButton("Сгенерировать два ответа (вслепую)")
         self.gen_btn.clicked.connect(self.generate_responses)
         main_layout.addWidget(self.gen_btn)
 
-        # Responses Layout
         resp_layout = QHBoxLayout()
         
-        # Opcion A
         layout_a = QVBoxLayout()
         layout_a.addWidget(QLabel("Вариант А:"))
         self.text_a = QTextEdit()
@@ -181,7 +172,6 @@ class BlindTesterApp(QMainWindow):
         
         resp_layout.addLayout(layout_a)
 
-        # Opcion B
         layout_b = QVBoxLayout()
         layout_b.addWidget(QLabel("Вариант Б:"))
         self.text_b = QTextEdit()
@@ -197,7 +187,6 @@ class BlindTesterApp(QMainWindow):
         
         main_layout.addLayout(resp_layout)
         
-        # Context Display (hidden until voted)
         self.context_label = QLabel("Справочный контекст, который использовал RAG:")
         self.context_label.hide()
         main_layout.addWidget(self.context_label)
@@ -251,7 +240,6 @@ class BlindTesterApp(QMainWindow):
         self.vote_a_btn.setEnabled(False)
         self.vote_b_btn.setEnabled(False)
         
-        # Кто победил?
         rag_won = False
         if choice == "A" and "RAG был вариантом А" in self.current_truth:
             rag_won = True
@@ -267,7 +255,6 @@ class BlindTesterApp(QMainWindow):
             
         self.stats_label.setText(f"Счетчик побед - RAG: {self.rag_wins} | Base DeepSeek: {self.base_wins}")
         
-        # Показываем контекст
         self.context_label.show()
         self.context_box.show()
         
@@ -277,10 +264,9 @@ if __name__ == "__main__":
     app = QApplication(sys.argv)
     load_dotenv()
     
-    # Инициализируем DeepSeek менеджер
     ds_manager = DeepSeekManager()
     
     window = BlindTesterApp()
-    window.ds = ds_manager  # Передаем менеджер в окно
+    window.ds = ds_manager  
     window.show()
     sys.exit(app.exec())

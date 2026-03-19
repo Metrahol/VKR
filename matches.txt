@@ -1,0 +1,29 @@
+1807: self.clash_leader = None
+1839: self.agent_worker.generation_complete.connect(self.on_generation_complete, Qt.ConnectionType.QueuedConnection)
+2503: self.engine._add_to_transcript(self.engine.user_name, text)
+2522: self.engine._add_to_transcript(self.engine.user_name, text)
+2534: self.engine._add_to_transcript(self.engine.user_name, text)
+2543: raw_prompt = self.engine.get_opponent_opening_prompt(self.last_user_speech)
+2565: def on_generation_complete(self, text, metadata):
+2641: self.engine._add_to_transcript("Жюри", verdict_text)
+2648: is_clash = metadata.get('is_clash_turn', False)
+2655: self.engine._add_to_transcript(speaker_name, text)
+2670: self.engine._add_to_transcript(self.engine.user_name, text)
+2701: self.engine._add_to_transcript("Жюри", f"Обоснование: {reasoning}")
+2708: self.engine._add_to_transcript("Жюри", f"Фидбэк: {feedback}")
+2748: self.engine._add_to_transcript("Жюри", text)
+2755: self.engine._add_to_transcript("Жюри", f"Объяснение (Matter): {expl}")
+2762: self.engine._add_to_transcript("Жюри", f"Объяснение (Manner): {expl}")
+2769: self.engine._add_to_transcript("Жюри", f"Объяснение (Method): {expl}")
+2778: self.engine._add_to_transcript("Система", f"Использованные материалы RAG:\n{citations_text}")
+2848: self.clash_leader = action['leader']
+2849: self.clash_responder = self.engine.p2_name if self.clash_leader == self.engine.p1_name else self.engine.p1_name
+2850: self.current_clash_turn_holder = self.clash_leader
+2855: text = f"Начинается раунд полемики. Ведущий — {self.clash_leader}."
+2857: text = f"Право на встречный вопрос переходит к: {self.clash_leader}."
+2885: self.engine._add_to_transcript(self.engine.user_name, text)
+2889: self.current_clash_turn_holder = self.clash_responder if self.current_clash_turn_holder == self.clash_leader else self.clash_leader
+2897: is_leader = (self.current_clash_turn_holder == self.clash_leader)
+2899: raw_prompt = self.engine.get_clash_leader_prompt(self.last_clash_speech)
+2923: self.current_clash_turn_holder = self.clash_responder if self.current_clash_turn_holder == self.clash_leader else self.clash_leader
+2930: 'speaker_name': actual_speaker, 'is_clash_turn': True, 'is_stream': True,

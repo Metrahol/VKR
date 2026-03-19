@@ -110,31 +110,7 @@ def get_web_context(queries_list, max_results_per_query=2):
     """
     Извлекает информацию из поисковика DuckDuckGo для переданного списка запросов.
     """
-    if not queries_list:
-        return "No web context available"
-        
-    from duckduckgo_search import DDGS
-    ddgs = DDGS()
-    all_results = []
-    
-    for query in queries_list:
-        try:
-            print(f"[Web-RAG] Поиск в DuckDuckGo: '{query}'...")
-            results = ddgs.text(query, max_results=max_results_per_query)
-            
-            for index, r in enumerate(results):
-                body = r.get("body", "")
-                if body:
-                    all_results.append(f"- {body}")
-                    
-        except Exception as e:
-            print(f"[Web-RAG] Ошибка сети при поиске '{query}': {e}")
-            continue
-            
-    if not all_results:
-        return "No web context available"
-        
-    return "\n".join(all_results)
+    return "No web context available"
 
 if __name__ == "__main__":
     print("Тест WEB-ONLY философа (Сократ):")

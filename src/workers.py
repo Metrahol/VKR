@@ -45,13 +45,15 @@ class AgentWorker(QtCore.QObject):
                 elif role == 'jury':
                     generated_text = ds.generate_jury(system_prompt, prompt)
                 else:
-                    generated_text = ds.generate_opponent(system_prompt, prompt, stream=False)
+                    use_chat = metadata.get('use_chat_model', False)
+                    generated_text = ds.generate_opponent(system_prompt, prompt, stream=False, use_chat_model=use_chat)
 
                 print(f"WORKER_AGENT: Генерация завершена за {time.time() - start_time:.2f} сек.")
                 self.generation_complete.emit(generated_text, metadata)
                 return
 
-            stream = ds.generate_opponent(system_prompt, prompt, stream=True)
+            use_chat = metadata.get('use_chat_model', False)
+            stream = ds.generate_opponent(system_prompt, prompt, stream=True, use_chat_model=use_chat)
             full_text = ""
             current_buffer = ""
 
@@ -103,6 +105,8 @@ class SpeakerWorker(QtCore.QObject):
         if not os.path.exists(self.cache_dir):
             os.makedirs(self.cache_dir)
 
+        self._volume = 0.8  # Громкость по умолчанию
+
         try:
             pygame.mixer.init(frequency=24000, size=-16, channels=1)
             print("WORKER_SPEAKER: Pygame mixer успешно инициализирован.")
@@ -133,6 +137,12 @@ class SpeakerWorker(QtCore.QObject):
             self._current_voice = voice_id
             self._current_rate = rate
             self._current_pitch = pitch
+
+    @QtCore.Slot(float)
+    def set_volume(self, volume):
+        """Устанавливает громкость воспроизведения (0.0 - 1.0)."""
+        with self._lock:
+            self._volume = max(0.0, min(1.0, volume))
 
     def clean_and_split(self, text_list):
         full_text = ' '.join(text_list)
@@ -256,6 +266,9 @@ class SpeakerWorker(QtCore.QObject):
                         break
 
                     self.speech_started.emit(item['text'])
+                    # Устанавливаем громкость перед воспроизведением
+                    with self._lock:
+                        item['sound'].set_volume(self._volume)
                     item['sound'].play()
 
                     playback_start_time = time.time()

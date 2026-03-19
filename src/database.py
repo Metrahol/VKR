@@ -193,7 +193,13 @@ class DatabaseManager:
             conn.commit()
             return coins_reward
 
-  
+    def add_coins(self, user_id, amount):
+        """Начисляет монеты пользователю (для режима Шоу и прочих наград)."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("UPDATE user_stats SET coins = coins + ? WHERE user_id = ?", (amount, user_id))
+            conn.commit()
+
     def get_unlocked_opponents(self, user_id):
         """Возвращает список имен открытых противников."""
         with self._get_connection() as conn:

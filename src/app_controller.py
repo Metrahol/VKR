@@ -7,8 +7,10 @@ import speech_recognition as sr
 from PySide6 import QtWidgets, QtCore, QtGui
 from PySide6.QtUiTools import QUiLoader
 from PySide6.QtCore import Signal, Qt, QThread, QUrl
-from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
+from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput, QMediaDevices
 import os
+
+from settings_manager import SettingsManager
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MUSIC_DIR = os.path.join(BASE_DIR, "music")
@@ -18,10 +20,12 @@ UI_DIR = os.path.join(BASE_DIR, "ui")
 from rag_retriever import get_philosopher_context, get_web_context
 import resources_rc
 from debate_manager import DebateManager
+from show_debate_manager import ShowDebateManager
 from workers import AgentWorker, SpeakerWorker
 from agents import DeepSeekManager, get_opponent_system_prompt, MODERATOR_PROMPT, JURY_PROMPT, CRITIQUE_PROMPT
 from database import DatabaseManager
 from philosophers_data import PHILOSOPHERS_DATA
+from show_widgets import BetDialog, JuryEvaluationWidget
 
 SENTENCE_SPLIT_RE = re.compile(r'(?<=[.!?…])\s+')
 
@@ -457,6 +461,38 @@ class CustomSuccessDialog(QtWidgets.QDialog):
             parent_geo = self.parentWidget().geometry()
             self.move(parent_geo.center() - self.rect().center())
         super().showEvent(event)
+
+class FlippableLabel(QtWidgets.QLabel):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._flipped = False
+
+    def setFlipped(self, flipped):
+        self._flipped = flipped
+        self.update()
+
+    def paintEvent(self, event):
+        if not self._flipped:
+            super().paintEvent(event)
+            return
+
+        painter = QtGui.QPainter(self)
+        painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
+        painter.setRenderHint(QtGui.QPainter.RenderHint.SmoothPixmapTransform)
+        
+        # Отражаем по горизонтали
+        painter.translate(self.width(), 0)
+        painter.scale(-1, 1)
+        
+        if self.pixmap():
+            # Рисуем пиксмап с учетом масштабирования (setScaledContents=True)
+            if self.hasScaledContents():
+                painter.drawPixmap(self.rect(), self.pixmap())
+            else:
+                super().paintEvent(event) # fall back if not scaled
+        else:
+            super().paintEvent(event)
+        painter.end()
 
 class AuthScreen(QtWidgets.QWidget):
     login_requested = Signal(str, str)
@@ -1242,9 +1278,597 @@ class PhilosopherDetailsScreen(QtWidgets.QWidget):
         
         self.quote_lbl.setText(f"«{data['quote']}»")
 
+
+class SettingsWidget(QtWidgets.QWidget):
+    """
+    Экран настроек приложения.
+
+    Стилистика: академическая (gold/sepia), идентичная главному меню.
+    Содержит:
+      - QComboBox  — выбор микрофона (через QMediaDevices)
+      - QSlider    — громкость голоса оппонента (TTS), 0–100 %
+      - QSlider    — громкость фоновой музыки, 0–100 %
+      - QComboBox  — скорость речи (Медленная / Обычная / Быстрая)
+      - QSpinBox   — размер шрифта субтитров, 14–24 px
+      - QPushButton «Сохранить и вернуться в меню»
+
+    Сигнал `saved` эмитируется после записи настроек в SettingsManager,
+    чтобы AppController мог немедленно применить их к активным объектам
+    (pygame.mixer, QAudioOutput и т.д.).
+    """
+
+    saved = Signal()  # сигнал, который AppController ловит для сохранения
+    music_volume_changed = Signal(int)  # для предпрослушивания громкости музыки
+    tts_volume_changed = Signal(int)    # для предпрослушивания громкости голоса
+    test_voice_requested = Signal()     # сигнал для запуска тестовой фразы
+
+    # Общий стиль контейнера и элементов
+    _CONTAINER_SS = """
+        QFrame#SettingsContainer {
+            background-color: rgba(20, 20, 30, 245);
+            border-radius: 16px;
+            border: 2px solid #a67c00;
+        }
+    """
+    _LABEL_SS = "color: #d4af37; font-size: 15px; font-weight: bold; background: transparent; border: none;"
+    _VALUE_SS = "color: #ffffff; font-size: 14px; background: transparent; border: none;"
+    _COMBO_SS = """
+        QComboBox {
+            background-color: rgba(30, 30, 46, 220);
+            color: #ffffff;
+            border: 2px solid #a67c00;
+            border-radius: 8px;
+            padding: 4px 12px;
+            font-size: 16px;
+            font-weight: bold;
+            min-height: 42px;
+        }
+        QComboBox::drop-down { border-left: 1px solid #a67c00; width: 28px; }
+        QComboBox QAbstractItemView {
+            background: #1e1e2e;
+            color: #ffffff;
+            selection-background-color: #a67c00;
+            selection-color: #3e2723;
+            outline: none;
+        }
+    """
+    _SLIDER_SS = """
+        QSlider::groove:horizontal {
+            height: 8px;
+            background: rgba(80,60,20,150);
+            border-radius: 4px;
+        }
+        QSlider::sub-page:horizontal {
+            background: qlineargradient(x1:0,y1:0,x2:1,y2:0,stop:0 #a67c00,stop:1 #d4af37);
+            border-radius: 4px;
+        }
+        QSlider::handle:horizontal {
+            background: #d4af37;
+            border: 2px solid #a67c00;
+            width: 18px;
+            height: 18px;
+            margin: -5px 0;
+            border-radius: 9px;
+        }
+        QSlider::handle:horizontal:hover { background: #ffca28; }
+    """
+    _SPINBOX_SS = """
+        QSpinBox {
+            background-color: rgba(30, 30, 46, 220);
+            color: #ffffff;
+            border: 2px solid #a67c00;
+            border-radius: 8px;
+            padding: 4px 10px;
+            font-size: 16px;
+            font-weight: bold;
+            min-width: 100px;
+            min-height: 42px;
+        }
+        QSpinBox::up-button, QSpinBox::down-button {
+            width: 24px;
+            background: rgba(164, 124, 0, 100);
+            border: none;
+        }
+        QSpinBox::up-button:hover, QSpinBox::down-button:hover {
+            background: #a67c00;
+        }
+    """
+    _SAVE_BTN_SS = """
+        QPushButton {
+            background-color: qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #d4af37,stop:1 #a67c00);
+            color: #3e2723;
+            font-size: 18px;
+            font-weight: bold;
+            border-radius: 10px;
+            border: 2px solid #a67c00;
+            padding: 12px 30px;
+            outline: none;
+        }
+        QPushButton:hover {
+            background-color: qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #edd27a,stop:1 #d4af37);
+        }
+        QPushButton:pressed { background-color: #a67c00; }
+    """
+    _TEST_BTN_SS = """
+        QPushButton {
+            background-color: rgba(164, 124, 0, 80);
+            color: #ffca28;
+            font-size: 13px;
+            font-weight: bold;
+            border-radius: 6px;
+            border: 1px solid #a67c00;
+            padding: 4px 10px;
+            outline: none;
+        }
+        QPushButton:hover { background-color: rgba(164, 124, 0, 150); }
+        QPushButton:pressed { background-color: #a67c00; color: #3e2723; }
+    """
+
+    def __init__(self, settings: SettingsManager, parent=None):
+        super().__init__(parent)
+        self.settings = settings
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setObjectName("SettingsScreen")
+        self.setStyleSheet(
+            "#SettingsScreen { border-image: url(assets/main_menu_bg.png) 0 0 0 0 stretch stretch; }"
+        )
+        self._build_ui()
+        self._load_from_settings()
+
+    # ------------------------------------------------------------------
+    # Построение интерфейса
+    # ------------------------------------------------------------------
+
+    def _build_ui(self):
+        outer = QtWidgets.QVBoxLayout(self)
+        outer.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        # ── Центральный контейнер ──────────────────────────────────────
+        self.container = QtWidgets.QFrame()
+        self.container.setObjectName("SettingsContainer")
+        self.container.setStyleSheet(self._CONTAINER_SS)
+        self.container.setFixedSize(680, 700)  # Увеличили высоту до 700, чтобы не было «нахлёста»
+
+        outer.addWidget(self.container)
+
+        vbox = QtWidgets.QVBoxLayout(self.container)
+        vbox.setContentsMargins(50, 30, 50, 30)
+        vbox.setSpacing(10)  # Уменьшили общий шаг, будем добавлять отступы вручную
+
+        # ── Заголовок ─────────────────────────────────────────────────
+        title = QtWidgets.QLabel("⚙  НАСТРОЙКИ")
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        title.setStyleSheet(
+            "font-size: 30px; font-weight: 900; color: #ffca28; "
+            "background: transparent; border: none; "
+            "font-family: 'Times New Roman', serif; letter-spacing: 3px;"
+        )
+        vbox.addWidget(title)
+
+        sep = self._make_separator()
+        vbox.addWidget(sep)
+        vbox.addSpacing(10)
+
+        # ── 1. Выбор микрофона ────────────────────────────────────────
+        vbox.addLayout(self._make_label_row("🎙  Микрофон"))
+        self.mic_combo = QtWidgets.QComboBox()
+        self.mic_combo.setStyleSheet(self._COMBO_SS)
+        self.mic_combo.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._populate_microphones()
+        vbox.addWidget(self.mic_combo)
+        vbox.addSpacing(10)
+
+        # ── 2. Громкость TTS ──────────────────────────────────────────
+        self._tts_val_lbl = QtWidgets.QLabel("80 %")
+        self._tts_val_lbl.setStyleSheet(self._VALUE_SS)
+        self._tts_val_lbl.setFixedWidth(48)
+        
+        tts_row = self._make_label_row("🔊  Громкость голоса оппонента", self._tts_val_lbl)
+        # Добавляем кнопку теста в ту же строку, что и заголовок
+        self.test_btn = QtWidgets.QPushButton("▶ ТЕСТ")
+        self.test_btn.setStyleSheet(self._TEST_BTN_SS)
+        self.test_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.test_btn.clicked.connect(self.test_voice_requested.emit)
+        tts_row.insertWidget(2, self.test_btn) # Вставляем перед значением %
+        tts_row.insertSpacing(3, 10)
+        
+        vbox.addLayout(tts_row)
+        self.tts_slider = QtWidgets.QSlider(Qt.Orientation.Horizontal)
+        self.tts_slider.setRange(0, 100)
+        self.tts_slider.setStyleSheet(self._SLIDER_SS)
+        self.tts_slider.valueChanged.connect(
+            lambda v: (self._tts_val_lbl.setText(f"{v} %"), self.tts_volume_changed.emit(v))
+        )
+        vbox.addWidget(self.tts_slider)
+        vbox.addSpacing(10)
+
+        # ── 3. Громкость музыки ───────────────────────────────────────
+        self._music_val_lbl = QtWidgets.QLabel("15 %")
+        self._music_val_lbl.setStyleSheet(self._VALUE_SS)
+        self._music_val_lbl.setFixedWidth(48)
+        vbox.addLayout(self._make_label_row("🎵  Громкость фоновой музыки", self._music_val_lbl))
+        self.music_slider = QtWidgets.QSlider(Qt.Orientation.Horizontal)
+        self.music_slider.setRange(0, 100)
+        self.music_slider.setStyleSheet(self._SLIDER_SS)
+        self.music_slider.valueChanged.connect(
+            lambda v: (self._music_val_lbl.setText(f"{v} %"), self.music_volume_changed.emit(v))
+        )
+        vbox.addWidget(self.music_slider)
+        vbox.addSpacing(10)
+
+        # ── 4. Скорость речи ──────────────────────────────────────────
+        vbox.addLayout(self._make_label_row("⏩  Скорость речи оппонента"))
+        self.rate_combo = QtWidgets.QComboBox()
+        self.rate_combo.addItems(["Медленная", "Обычная", "Быстрая"])
+        self.rate_combo.setStyleSheet(self._COMBO_SS)
+        self.rate_combo.setCursor(Qt.CursorShape.PointingHandCursor)
+        vbox.addWidget(self.rate_combo)
+        vbox.addSpacing(10)
+
+        # ── 5. Размер шрифта субтитров ────────────────────────────────
+        vbox.addLayout(self._make_label_row("🔡  Размер шрифта субтитров (14–24 px)"))
+        spin_row = QtWidgets.QHBoxLayout()
+        self.font_spin = QtWidgets.QSpinBox()
+        self.font_spin.setRange(14, 24)        # СТРОГОЕ ограничение
+        self.font_spin.setSuffix(" px")
+        self.font_spin.setStyleSheet(self._SPINBOX_SS)
+        spin_row.addWidget(self.font_spin)
+        spin_row.addStretch()
+        vbox.addLayout(spin_row)
+
+        vbox.addSpacing(20)
+
+        # ── Кнопка «Сохранить» ────────────────────────────────────────
+        self.save_btn = QtWidgets.QPushButton("💾  Сохранить и вернуться в меню")
+        self.save_btn.setStyleSheet(self._SAVE_BTN_SS)
+        self.save_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.save_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.save_btn.setMinimumHeight(55)
+        self.save_btn.clicked.connect(self._on_save)
+        vbox.addWidget(self.save_btn, alignment=Qt.AlignmentFlag.AlignCenter)
+        vbox.addStretch(1)
+
+
+    # ------------------------------------------------------------------
+    # Вспомогательные методы построения UI
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _make_label_row(text: str, right_widget: QtWidgets.QWidget = None) -> QtWidgets.QHBoxLayout:
+        """Создаёт горизонтальный ряд: иконка+текст слева, опциональный виджет справа."""
+        row = QtWidgets.QHBoxLayout()
+        lbl = QtWidgets.QLabel(text)
+        lbl.setStyleSheet(
+            "color: #d4af37; font-size: 15px; font-weight: bold; "
+            "background: transparent; border: none;"
+        )
+        row.addWidget(lbl)
+        if right_widget:
+            row.addStretch()
+            row.addWidget(right_widget)
+        return row
+
+    @staticmethod
+    def _make_separator() -> QtWidgets.QFrame:
+        sep = QtWidgets.QFrame()
+        sep.setFrameShape(QtWidgets.QFrame.Shape.HLine)
+        sep.setStyleSheet("border: 1px solid rgba(164, 124, 0, 120);")
+        sep.setFixedHeight(1)
+        return sep
+
+    def _populate_microphones(self):
+        """Заполняет список микрофонов через QMediaDevices."""
+        self.mic_combo.clear()
+        self.mic_combo.addItem("По умолчанию", userData="")
+        devices = QMediaDevices.audioInputs()
+        for dev in devices:
+            self.mic_combo.addItem(dev.description(), userData=dev.description())
+
+    # ------------------------------------------------------------------
+    # Загрузка / сохранение настроек
+    # ------------------------------------------------------------------
+
+    def _load_from_settings(self):
+        """Восстанавливает состояние всех контролов из SettingsManager."""
+        # Микрофон
+        saved_mic = self.settings.microphone_name
+        idx = self.mic_combo.findData(saved_mic)
+        self.mic_combo.setCurrentIndex(max(0, idx))
+
+        # Слайдеры
+        self.tts_slider.setValue(self.settings.tts_volume)
+        self.music_slider.setValue(self.settings.music_volume)
+
+        # Скорость речи
+        rate_idx = self.rate_combo.findText(self.settings.speech_rate)
+        self.rate_combo.setCurrentIndex(max(0, rate_idx))
+
+        # Шрифт субтитров
+        self.font_spin.setValue(self.settings.subtitle_font_size)
+
+    def showEvent(self, event):
+        """Каждый раз при показе экрана обновляем список устройств и значения."""
+        self._populate_microphones()
+        self._load_from_settings()
+        super().showEvent(event)
+
+    def _on_save(self):
+        """Записывает выбранные значения в SettingsManager, затем эмитирует `saved`."""
+        # Микрофон
+        self.settings.microphone_name = self.mic_combo.currentData() or ""
+
+        # Громкости
+        self.settings.tts_volume   = self.tts_slider.value()
+        self.settings.music_volume = self.music_slider.value()
+
+        # Скорость речи
+        self.settings.speech_rate = self.rate_combo.currentText()
+
+        # Размер шрифта
+        self.settings.subtitle_font_size = self.font_spin.value()
+
+        # Информируем контроллер
+        self.saved.emit()
+
+
+class SetupWidget(QtWidgets.QWidget):
+    start_requested = Signal(bool, str, str, int, int) # is_critique, raw_topic, filepath, time_limit, rounds
+    start_show_requested = Signal(str, str, str, str, int) # topic, p1, p2, role, rounds
+    back_requested = Signal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.critique_filepath = None
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setObjectName("SetupScreen")
+        self.setStyleSheet("#SetupScreen { border-image: url(assets/main_menu_bg.png) 0 0 0 0 stretch stretch; }")
+        
+        setup_main_layout = QtWidgets.QVBoxLayout(self)
+        setup_main_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        
+        setup_container = QtWidgets.QFrame()
+        setup_container.setFixedSize(640, 800)
+        setup_container.setStyleSheet("QFrame { background-color: rgba(20, 20, 30, 240); border-radius: 15px; border: 2px solid #a67c00; }")
+        
+        vbox_setup = QtWidgets.QVBoxLayout(setup_container)
+        vbox_setup.setContentsMargins(40, 30, 40, 40)
+        vbox_setup.setSpacing(15)
+        
+        setup_title = QtWidgets.QLabel("НАСТРОЙКА ПОЕДИНКА", setup_container)
+        setup_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        setup_title.setStyleSheet("font-size: 34px; font-weight: bold; color: #ffca28; border: none; background: transparent; margin-bottom: 10px; min-height: 50px;")
+        
+        self.mode_combo = QtWidgets.QComboBox(setup_container)
+        self.mode_combo.addItems(["Тренировочные дебаты", "Критика научного тезиса", "Шоу: ИИ vs ИИ"])
+        self.mode_combo.setStyleSheet("""
+            QComboBox { background-color: rgba(30,30,40,200); color: white; border: 2px solid #a67c00; border-radius: 8px; padding: 10px; font-size: 18px; font-weight: bold;}
+            QComboBox::drop-down { border-left: 2px solid #a67c00; }
+            QComboBox QAbstractItemView { background: #1e1e2e; color: white; selection-background-color: #a67c00; outline: none; }
+        """)
+        self.mode_combo.currentIndexChanged.connect(self.on_mode_changed)
+
+        self.topic_input = QtWidgets.QLineEdit(setup_container)
+        self.topic_input.setPlaceholderText("Введите тему дебатов...")
+        self.topic_input.setStyleSheet("QLineEdit { padding: 10px 20px; font-size: 20px; border: 2px solid #555; border-radius: 8px; background-color: rgba(30,30,40,200); color: white; }")
+        
+        self.file_upload_wrapper = QtWidgets.QWidget(setup_container)
+        fu_layout = QtWidgets.QHBoxLayout(self.file_upload_wrapper)
+        fu_layout.setContentsMargins(0, 0, 0, 0)
+        
+        self.file_upload_btn = QtWidgets.QPushButton("📎 Прикрепить файл (TXT/PDF/DOCX)")
+        self.file_upload_btn.setStyleSheet("QPushButton { background-color: #2c3e50; color: white; font-size: 16px; font-weight:bold; padding: 10px; border-radius: 8px; } QPushButton:hover { background-color: #34495e; }")
+        self.file_upload_btn.clicked.connect(self.upload_critique_file)
+        self.file_upload_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.file_name_lbl = QtWidgets.QLabel("")
+        self.file_name_lbl.setStyleSheet("color: #a0a0a0; font-size: 16px; font-style: italic;")
+        
+        fu_layout.addWidget(self.file_upload_btn)
+        fu_layout.addWidget(self.file_name_lbl)
+        self.file_upload_wrapper.hide()
+
+        settings_layout = QtWidgets.QFormLayout()
+        settings_layout.setHorizontalSpacing(20)
+        settings_layout.setVerticalSpacing(15)
+        
+        lbl_style = "color: #dcdcdc; font-size: 18px; font-weight: bold; background: transparent; border: none;"
+        
+        self.time_limit_combo = QtWidgets.QComboBox()
+        self.time_limit_combo.setStyleSheet(self.mode_combo.styleSheet())
+        self.time_limit_combo.addItem("30 сек", 30)
+        self.time_limit_combo.addItem("60 сек", 60)
+        self.time_limit_combo.addItem("120 сек", 120)
+        self.time_limit_combo.addItem("5 минут", 300)
+        self.time_limit_combo.addItem("Безлимит", 0)
+        self.time_limit_combo.setCurrentIndex(1)
+        
+        self.time_lbl = QtWidgets.QLabel("Время на ответ:")
+        self.time_lbl.setStyleSheet(lbl_style)
+        settings_layout.addRow(self.time_lbl, self.time_limit_combo)
+        
+        self.rounds_spinbox = QtWidgets.QSpinBox()
+        self.rounds_spinbox.setRange(1, 10)
+        self.rounds_spinbox.setValue(3)
+        self.rounds_spinbox.setStyleSheet("""
+            QSpinBox { background-color: rgba(30,30,40,200); color: white; border: 2px solid #a67c00; border-radius: 8px; padding: 10px; font-size: 18px; font-weight: bold;}
+            QSpinBox::up-button, QSpinBox::down-button { width: 30px; background: rgba(164, 124, 0, 100); border: none; }
+            QSpinBox::up-button:hover, QSpinBox::down-button:hover { background: #a67c00; }
+        """)
+        
+        self.rounds_lbl = QtWidgets.QLabel("Кол-во раундов:")
+        self.rounds_lbl.setStyleSheet(lbl_style)
+        settings_layout.addRow(self.rounds_lbl, self.rounds_spinbox)
+
+        self.confirm_start_btn = QtWidgets.QPushButton("К БАРЬЕРУ", setup_container)
+        self.confirm_start_btn.setFixedSize(380, 60)
+        self.confirm_start_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.confirm_start_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.confirm_start_btn.setStyleSheet("""
+            QPushButton { background-color: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #d4af37, stop:1 #a67c00); color: #3e2723; font-size: 24px; font-weight: bold; border-radius: 10px; border: none; }
+            QPushButton:hover { background-color: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #edd27a, stop:1 #d4af37); }
+            QPushButton:disabled { background-color: #555555; color: #aaaaaa; }
+        """)
+        self.confirm_start_btn.clicked.connect(self.on_start_clicked)
+        
+        self.setup_back_btn = QtWidgets.QPushButton("Отмена", setup_container)
+        self.setup_back_btn.setFixedSize(300, 45)
+        self.setup_back_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setup_back_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.setup_back_btn.setStyleSheet("""
+            QPushButton { 
+                background-color: rgba(60, 60, 80, 200); 
+                color: #B0B0B0; font-size: 14px; font-weight: bold; 
+                border-radius: 8px; border: 1px solid #555;
+            } 
+            QPushButton:hover { background-color: #c62828; color: white; border-color: #ef5350; }
+        """)
+        self.setup_back_btn.clicked.connect(self.back_requested.emit)
+        
+        # === ШОУ-СПЕЦИФИЧНЫЕ ЭЛЕМЕНТЫ ===
+        show_lbl_style = "color: #dcdcdc; font-size: 18px; font-weight: bold; background: transparent; border: none;"
+        combo_style = self.mode_combo.styleSheet()
+
+        self.show_settings_layout = QtWidgets.QFormLayout()
+        self.show_settings_layout.setHorizontalSpacing(20)
+        self.show_settings_layout.setVerticalSpacing(12)
+
+        from agents import OPPONENTS_CONFIG
+        opponent_names = [name for name in OPPONENTS_CONFIG.keys() if name != "Академический Рецензент"]
+
+        self.show_p1_lbl = QtWidgets.QLabel("Оппонент 1:")
+        self.show_p1_lbl.setStyleSheet(show_lbl_style)
+        self.show_p1_combo = QtWidgets.QComboBox(setup_container)
+        self.show_p1_combo.addItems(opponent_names)
+        self.show_p1_combo.setCurrentIndex(0)
+        self.show_p1_combo.setStyleSheet(combo_style)
+        self.show_settings_layout.addRow(self.show_p1_lbl, self.show_p1_combo)
+
+        self.show_p2_lbl = QtWidgets.QLabel("Оппонент 2:")
+        self.show_p2_lbl.setStyleSheet(show_lbl_style)
+        self.show_p2_combo = QtWidgets.QComboBox(setup_container)
+        self.show_p2_combo.addItems(opponent_names)
+        self.show_p2_combo.setCurrentIndex(min(1, len(opponent_names) - 1))
+        self.show_p2_combo.setStyleSheet(combo_style)
+        self.show_settings_layout.addRow(self.show_p2_lbl, self.show_p2_combo)
+
+        self.show_role_lbl = QtWidgets.QLabel("Ваша роль:")
+        self.show_role_lbl.setStyleSheet(show_lbl_style)
+        self.show_role_combo = QtWidgets.QComboBox(setup_container)
+        self.show_role_combo.addItems(["Зритель (автономные дебаты)", "Жюри (я оцениваю)"])
+        self.show_role_combo.setStyleSheet(combo_style)
+        self.show_settings_layout.addRow(self.show_role_lbl, self.show_role_combo)
+
+        # ====== Кнопка перемены мест ======
+        self.swap_btn = QtWidgets.QPushButton("⇅ Поменять порядок выступления")
+        self.swap_btn.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(60, 60, 80, 180);
+                color: #dcdcdc; font-size: 13px;
+                border: 1px solid #777; border-radius: 5px;
+                padding: 5px;
+            }
+            QPushButton:hover { background-color: #444466; }
+        """)
+        self.swap_btn.clicked.connect(self._swap_show_opponents)
+        self.show_settings_layout.addRow("", self.swap_btn)
+
+        # Контейнер для шоу-элементов (скрыт по умолчанию)
+        self.show_settings_widget = QtWidgets.QWidget()
+        self.show_settings_widget.setLayout(self.show_settings_layout)
+        self.show_settings_widget.hide()
+
+        vbox_setup.addWidget(setup_title)
+        vbox_setup.addWidget(self.mode_combo)
+        vbox_setup.addWidget(self.topic_input)
+        vbox_setup.addWidget(self.file_upload_wrapper)
+        vbox_setup.addLayout(settings_layout)
+        vbox_setup.addWidget(self.show_settings_widget)
+        vbox_setup.addSpacing(20)
+        vbox_setup.addWidget(self.confirm_start_btn,alignment=Qt.AlignmentFlag.AlignCenter)
+        vbox_setup.addWidget(self.setup_back_btn,alignment=Qt.AlignmentFlag.AlignCenter)
+    
+        setup_main_layout.addWidget(setup_container)
+
+    def _swap_show_opponents(self):
+        p1_idx = self.show_p1_combo.currentIndex()
+        p2_idx = self.show_p2_combo.currentIndex()
+        self.show_p1_combo.setCurrentIndex(p2_idx)
+        self.show_p2_combo.setCurrentIndex(p1_idx)
+
+    @QtCore.Slot(int)
+    def on_mode_changed(self, index):
+        if index == 1:  # Критика
+            self.file_upload_wrapper.show()
+            self.topic_input.setPlaceholderText("Введите ваш тезис или загрузите файл с текстом работы...")
+            self.time_lbl.hide()
+            self.time_limit_combo.hide()
+            self.rounds_lbl.hide()
+            self.rounds_spinbox.hide()
+            self.show_settings_widget.hide()
+        elif index == 2:  # Шоу
+            self.file_upload_wrapper.hide()
+            self.topic_input.setPlaceholderText("Введите тему для шоу-дебатов...")
+            self.time_lbl.hide()
+            self.time_limit_combo.hide()
+            self.rounds_lbl.show()
+            self.rounds_spinbox.show()
+            self.show_settings_widget.show()
+            self.confirm_start_btn.setText("НАЧАТЬ ШОУ")
+        else:  # Тренировочные
+            self.file_upload_wrapper.hide()
+            self.topic_input.setPlaceholderText("Введите тему дебатов...")
+            self.time_lbl.show()
+            self.time_limit_combo.show()
+            self.rounds_lbl.show()
+            self.rounds_spinbox.show()
+            self.show_settings_widget.hide()
+            self.confirm_start_btn.setText("К БАРЬЕРУ")
+
+    @QtCore.Slot()
+    def upload_critique_file(self):
+        filepath, _ = QtWidgets.QFileDialog.getOpenFileName(
+            self, "Выберите файл", "", "Supported files (*.txt *.pdf *.docx)"
+        )
+        if filepath:
+            self.critique_filepath = filepath
+            import os
+            self.file_name_lbl.setText(os.path.basename(filepath))
+
+    @QtCore.Slot()
+    def on_start_clicked(self):
+        mode_index = self.mode_combo.currentIndex()
+        if mode_index == 2:  # Шоу
+            p1 = self.show_p1_combo.currentText()
+            p2 = self.show_p2_combo.currentText()
+            if p1 == p2:
+                from PySide6.QtWidgets import QMessageBox
+                QMessageBox.warning(self, "Ошибка", "Нельзя выбрать одного и того же оппонента!")
+                return
+            raw_topic = self.topic_input.text().strip()
+            role = "spectator" if self.show_role_combo.currentIndex() == 0 else "jury"
+            rounds = self.rounds_spinbox.value()
+            raw_topic = self.topic_input.text().strip()
+            role = "spectator" if self.show_role_combo.currentIndex() == 0 else "jury"
+            rounds = self.rounds_spinbox.value()
+            self.start_show_requested.emit(raw_topic, p1, p2, role, rounds)
+        else:
+            is_critique = mode_index == 1
+            raw_topic = self.topic_input.text().strip()
+            filepath = getattr(self, "critique_filepath", "") or ""
+            time_limit = self.time_limit_combo.currentData()
+            rounds = self.rounds_spinbox.value()
+            self.start_requested.emit(is_critique, raw_topic, filepath, time_limit, rounds)
+
+    def set_loading(self, is_loading, text="Обработка..."):
+        self.confirm_start_btn.setEnabled(not is_loading)
+        if is_loading:
+            self.confirm_start_btn.setText(text)
+        else:
+            self.confirm_start_btn.setText("К БАРЬЕРУ")
+
 class AppController(QtWidgets.QMainWindow):
     request_generation = Signal(str, object, dict)
     request_speak = Signal(list)
+    request_set_volume = Signal(float)  # Новый сигнал для громкости голоса
     request_stream_start = Signal()
     request_stream_chunk = Signal(str)
     request_stream_finish = Signal()
@@ -1273,7 +1897,17 @@ class AppController(QtWidgets.QMainWindow):
         "Гай Юлий Цезарь": "assets/caesar.png",
         "Уильям Оккам": "assets/ockham.png",
         "Зигмунд Фрейд": "assets/freud.png",
-        "Мюррей Ротбард": "assets/rothbard.png"
+        "Мюррей Ротбард": "assets/rothbard.png",
+        "Томас Гоббс": "assets/hobbes.png",
+        "Сёрен Кьеркегор": "assets/kierkegaard.png",
+        "Карл Поппер": "assets/popper.png",
+        "Иеремия Бентам": "assets/bentham.png",
+        "Жан-Жак Руссо": "assets/rousseau.png",
+        "Дэвид Юм": "assets/hume.png",
+        "Марк Аврелий": "assets/aurelius.png",
+        "Артур Шопенгауэр": "assets/schopenhauer.png",
+        "Людвиг Витгенштейн": "assets/wittgenstein.png",
+        "Секст Эмпирик": "assets/empiricus.png"
     }
 
 
@@ -1283,6 +1917,9 @@ class AppController(QtWidgets.QMainWindow):
         self.initial_geometries = {}
         self.initial_font_sizes = {}
         self.is_fullscreen = False
+
+        # Настройки — инициализируем самыми первыми
+        self.settings = SettingsManager()
 
         self.engine = None
         self.opp_model = None
@@ -1304,6 +1941,7 @@ class AppController(QtWidgets.QMainWindow):
         self.current_clash_turn_holder = None
         self.last_clash_speech = ""
         self.clash_ending_pending = False
+        self.clash_turns_done = 0
 
         self.jury_phase_step = None
         self.pending_jury_questions = None
@@ -1340,6 +1978,7 @@ class AppController(QtWidgets.QMainWindow):
         self.request_speak.connect(self.speaker_worker.speak_sequence)
         self.speaker_worker.speech_started.connect(self.update_subtitles)
         self.speaker_worker.sequence_finished.connect(self.on_sequence_finished)
+        self.request_set_volume.connect(self.speaker_worker.set_volume)
         self.request_stream_start.connect(self.speaker_worker.start_stream)
         self.request_stream_chunk.connect(self.speaker_worker.append_stream_text)
         self.request_stream_finish.connect(self.speaker_worker.finish_stream)
@@ -1348,15 +1987,20 @@ class AppController(QtWidgets.QMainWindow):
 
     def _set_voice_for_speaker(self, speaker_name):
         voice_id = "ru-RU-SvetlanaNeural" if speaker_name == "Модератор" else "ru-RU-DmitryNeural"
-        rate = "-15%"
+        # По умолчанию берём скорость из настроек пользователя
+        rate = self.settings.get_edge_tts_rate()
         pitch = "+0Hz"
-        
+
         if speaker_name in PHILOSOPHERS_DATA:
             data = PHILOSOPHERS_DATA[speaker_name]
             voice_id = data.get("voice", "ru-RU-DmitryNeural")
-            rate = data.get("rate", "-15%")
+            # Для персонажа применяем пользовательскую скорость поверх базовой
+            base_rate = data.get("rate", "-15%")
+            # Если пользователь выбрал «Быстрая» — ускоряем чуть относительно базы
+            user_rate = self.settings.get_edge_tts_rate()
+            rate = user_rate if user_rate != "-15%" else base_rate
             pitch = data.get("pitch", "+0Hz")
-            
+
         self.request_set_voice.emit(voice_id, rate, pitch)
 
     def load_screens_and_connect_signals(self):
@@ -1406,6 +2050,13 @@ class AppController(QtWidgets.QMainWindow):
         self.tutorial_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.tutorial_btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
 
+        # Кнопка Настройки
+        self.settings_btn = QtWidgets.QPushButton("НАСТРОЙКИ", self.main_menu)
+        self.settings_btn.setGeometry((win_w - btn_w) // 2, 370 + 4*(btn_h + 15), btn_w, btn_h)
+        self.settings_btn.setStyleSheet(btn.styleSheet())
+        self.settings_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.settings_btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+
         # Инфо пользователя (Никнейм и Монеты) - Правый верхний угол
         self.user_info_lbl = QtWidgets.QLabel("", self.main_menu)
         self.user_info_lbl.setGeometry(win_w - 420, 20, 400, 40)
@@ -1427,89 +2078,32 @@ class AppController(QtWidgets.QMainWindow):
 
         # 2. ДЕБАТЫ
         self.debate_screen = loader.load(os.path.join(UI_DIR, "debate_screen.ui"), self)
+        # Replace QLabel with FlippableLabel for user and opp avatars
+        old_user_label = self.debate_screen.findChild(QtWidgets.QLabel, "user")
+        if old_user_label:
+            self.debate_screen.user = FlippableLabel(self.debate_screen)
+            self.debate_screen.user.setObjectName("user")
+            self.debate_screen.user.setGeometry(old_user_label.geometry())
+            self.debate_screen.user.setAlignment(old_user_label.alignment())
+            self.debate_screen.user.setStyleSheet(old_user_label.styleSheet())
+            self.debate_screen.user.setScaledContents(True)
+            old_user_label.deleteLater()
+
+        old_opp_label = self.debate_screen.findChild(QtWidgets.QLabel, "opp")
+        if old_opp_label:
+            self.debate_screen.opp = FlippableLabel(self.debate_screen)
+            self.debate_screen.opp.setObjectName("opp")
+            self.debate_screen.opp.setGeometry(old_opp_label.geometry())
+            self.debate_screen.opp.setAlignment(old_opp_label.alignment())
+            self.debate_screen.opp.setStyleSheet(old_opp_label.styleSheet())
+            self.debate_screen.opp.setScaledContents(True)
+            old_opp_label.deleteLater()
 
         # 3. НАСТРОЙКИ (SETUP SCREEN)
-        self.setup_screen = QtWidgets.QWidget()
-        self.setup_screen.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-        self.setup_screen.setObjectName("SetupScreen")
-        self.setup_screen.setStyleSheet("#SetupScreen { border-image: url(assets/main_menu_bg.png) 0 0 0 0 stretch stretch; }")
-        
-        setup_main_layout = QtWidgets.QVBoxLayout(self.setup_screen)
-        setup_main_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        
-        setup_container = QtWidgets.QFrame()
-        setup_container.setFixedSize(640, 500)
-        setup_container.setStyleSheet("QFrame { background-color: rgba(20, 20, 30, 240); border-radius: 15px; border: 2px solid #a67c00; }")
-        
-        vbox_setup = QtWidgets.QVBoxLayout(setup_container)
-        vbox_setup.setContentsMargins(40, 30, 40, 40)
-        vbox_setup.setSpacing(15)
-        
-        setup_title = QtWidgets.QLabel("НАСТРОЙКА ПОЕДИНКА", setup_container)
-        setup_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        setup_title.setStyleSheet("font-size: 34px; font-weight: bold; color: #ffca28; border: none; background: transparent; margin-bottom: 10px; min-height: 50px;")
-        
-        # Выбор режима
-        self.mode_combo = QtWidgets.QComboBox(setup_container)
-        self.mode_combo.addItems(["Тренировочные дебаты", "Критика научного тезиса"])
-        self.mode_combo.setStyleSheet("""
-            QComboBox { background-color: rgba(30,30,40,200); color: white; border: 2px solid #a67c00; border-radius: 8px; padding: 10px; font-size: 18px; font-weight: bold;}
-            QComboBox::drop-down { border-left: 2px solid #a67c00; }
-            QComboBox QAbstractItemView { background: #1e1e2e; color: white; selection-background-color: #a67c00; outline: none; }
-        """)
-        self.mode_combo.currentIndexChanged.connect(self.on_mode_changed)
-
-        self.topic_input = QtWidgets.QLineEdit(setup_container)
-        self.topic_input.setPlaceholderText("Введите тему дебатов...")
-        self.topic_input.setStyleSheet("QLineEdit { padding: 10px 20px; font-size: 20px; border: 2px solid #555; border-radius: 8px; background-color: rgba(30,30,40,200); color: white; }")
-        
-        self.file_upload_wrapper = QtWidgets.QWidget(setup_container)
-        fu_layout = QtWidgets.QHBoxLayout(self.file_upload_wrapper)
-        fu_layout.setContentsMargins(0, 0, 0, 0)
-        
-        self.file_upload_btn = QtWidgets.QPushButton("📎 Прикрепить файл (TXT/PDF/DOCX)")
-        self.file_upload_btn.setStyleSheet("QPushButton { background-color: #2c3e50; color: white; font-size: 16px; font-weight:bold; padding: 10px; border-radius: 8px; } QPushButton:hover { background-color: #34495e; }")
-        self.file_upload_btn.clicked.connect(self.upload_critique_file)
-        self.file_upload_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.file_name_lbl = QtWidgets.QLabel("")
-        self.file_name_lbl.setStyleSheet("color: #a0a0a0; font-size: 16px; font-style: italic;")
-        
-        fu_layout.addWidget(self.file_upload_btn)
-        fu_layout.addWidget(self.file_name_lbl)
-        self.file_upload_wrapper.hide()
-
-        self.confirm_start_btn = QtWidgets.QPushButton("К БАРЬЕРУ", setup_container)
-        self.confirm_start_btn.setFixedSize(380, 60)
-        self.confirm_start_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.confirm_start_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.confirm_start_btn.setStyleSheet("""
-            QPushButton { background-color: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #d4af37, stop:1 #a67c00); color: #3e2723; font-size: 24px; font-weight: bold; border-radius: 10px; border: none; }
-            QPushButton:hover { background-color: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #edd27a, stop:1 #d4af37); }
-        """)
-        
-        self.setup_back_btn = QtWidgets.QPushButton("Отмена", setup_container)
-        self.setup_back_btn.setFixedSize(300, 45)
-        self.setup_back_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setup_back_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.setup_back_btn.setStyleSheet("""
-            QPushButton { 
-                background-color: rgba(60, 60, 80, 200); 
-                color: #B0B0B0; font-size: 14px; font-weight: bold; 
-                border-radius: 8px; border: 1px solid #555;
-            } 
-            QPushButton:hover { background-color: #c62828; color: white; border-color: #ef5350; }
-        """)
-        self.setup_back_btn.clicked.connect(lambda: self.stacked_widget.setCurrentWidget(self.main_menu))
-        
-        vbox_setup.addWidget(setup_title)
-        vbox_setup.addWidget(self.mode_combo)
-        vbox_setup.addWidget(self.topic_input)
-        vbox_setup.addWidget(self.file_upload_wrapper)
-        vbox_setup.addSpacing(20)
-        vbox_setup.addWidget(self.confirm_start_btn,alignment=Qt.AlignmentFlag.AlignCenter)
-        vbox_setup.addWidget(self.setup_back_btn,alignment=Qt.AlignmentFlag.AlignCenter)
-    
-        setup_main_layout.addWidget(setup_container)
+        self.setup_screen = SetupWidget()
+        self.setup_screen.back_requested.connect(lambda: self.stacked_widget.setCurrentWidget(self.main_menu))
+        self.setup_screen.start_requested.connect(self.start_debate_with_topic)
+        self.setup_screen.start_show_requested.connect(self.start_show_debate)
 
         # 4. ЭКРАН АВТОРИЗАЦИИ
         self.auth_screen = AuthScreen()
@@ -1530,6 +2124,22 @@ class AppController(QtWidgets.QMainWindow):
         self.details_screen = PhilosopherDetailsScreen()
         self.details_screen.back_requested.connect(lambda: self.stacked_widget.setCurrentWidget(self.shop_screen))
 
+        # 8. ЭКРАН НАСТРОЕК
+        self.settings_screen = SettingsWidget(self.settings)
+        self.settings_screen.saved.connect(self.apply_settings)
+        # Реал-тайм изменение громкости для предпросмотра
+        self.settings_screen.music_volume_changed.connect(self._on_music_volume_preview)
+        self.settings_screen.tts_volume_changed.connect(self._on_tts_volume_preview)
+        self.settings_screen.test_voice_requested.connect(self._on_test_voice)
+
+        # 9. ЭКРАН ОЦЕНИВАНИЯ ЖЮРИ
+        self.jury_eval_screen = JuryEvaluationWidget()
+        self.jury_eval_screen.evaluation_complete.connect(self._handle_show_jury_complete)
+        self.jury_eval_screen.back_requested.connect(lambda: self.stacked_widget.setCurrentWidget(self.main_menu))
+
+        # Применяем громкость TTS сразу при инициализации
+        self._on_tts_volume_preview(self.settings.tts_volume)
+
         self.stacked_widget.addWidget(self.auth_screen)
         self.stacked_widget.addWidget(self.main_menu)
         self.stacked_widget.addWidget(self.setup_screen)
@@ -1537,6 +2147,8 @@ class AppController(QtWidgets.QMainWindow):
         self.stacked_widget.addWidget(self.profile_screen)
         self.stacked_widget.addWidget(self.shop_screen)
         self.stacked_widget.addWidget(self.details_screen)
+        self.stacked_widget.addWidget(self.settings_screen)
+        self.stacked_widget.addWidget(self.jury_eval_screen)
 
         widgets_to_capture = ['user', 'opp', 'left', 'right', 'time', 'topic', 'subtitleLabel', 'subtitletopicLabel']
         for name in widgets_to_capture:
@@ -1552,17 +2164,20 @@ class AppController(QtWidgets.QMainWindow):
         self.main_menu.installEventFilter(self)
 
         self.main_menu.startDebateButton.clicked.connect(self.go_to_setup_screen)
-        self.confirm_start_btn.clicked.connect(self.start_debate_with_topic)
         self.profile_btn.clicked.connect(self.go_to_profile)
         self.shop_btn.clicked.connect(self.go_to_shop)
         self.tutorial_btn.clicked.connect(self.start_tutorial)
+        self.settings_btn.clicked.connect(self.go_to_settings)
+        self.settings_btn.clicked.connect(self.go_to_settings)
 
         self.stacked_widget.setCurrentWidget(self.auth_screen)
 
-        # Фоновая музыка
+        # Фоновая музыка — берём громкость из сохранённых настроек (с коррекцией восприятия)
         self.bg_player = QMediaPlayer()
         self.bg_audio = QAudioOutput()
-        self.bg_audio.setVolume(0.15) # Тихая музыка
+        # Используем степенную зависимость (квадратичную) для сбалансированного изменения
+        music_vol = (self.settings.music_volume / 100.0) ** 2
+        self.bg_audio.setVolume(music_vol)
         self.bg_player.setAudioOutput(self.bg_audio)
         self.bg_player.setLoops(QMediaPlayer.Loops.Infinite)
 
@@ -1592,6 +2207,61 @@ class AppController(QtWidgets.QMainWindow):
         if self.bg_player.source() != url:
             self.bg_player.setSource(url)
             self.bg_player.play()
+
+    # --- ЭКРАН НАСТРОЕК ---
+
+    @QtCore.Slot()
+    def go_to_settings(self):
+        """Переходит на экран настроек."""
+        self.stacked_widget.setCurrentWidget(self.settings_screen)
+
+    @QtCore.Slot()
+    def apply_settings(self):
+        """
+        Применяет настройки, сохранённые SettingsWidget, к активным объектам
+        и возвращает пользователя в главное меню.
+        """
+        # Громкость фоновой музыки (квадратичная коррекция)
+        music_vol = (self.settings.music_volume / 100.0) ** 2
+        self.bg_audio.setVolume(music_vol)
+
+        # Громкость TTS (линейная шкала для голоса, чтобы не было слишком тихо)
+        tts_vol_float = self.settings.tts_volume / 100.0
+        self.request_set_volume.emit(tts_vol_float)
+        
+        # Шрифт субтитров применяется через update_subtitles при следующем вызове
+        # (стиль хранится в QLabel в debate_screen — обновляем немедленно если виджет доступен)
+        if hasattr(self, 'debate_screen') and hasattr(self.debate_screen, 'subtitleLabel'):
+            fsize = self.settings.subtitle_font_size
+            self.debate_screen.subtitleLabel.setStyleSheet(
+                f"background-color: rgba(0,0,100,0.8); color: #E0E0E0; "
+                f"border-radius: 10px; padding: 15px; font-size: {fsize}px;"
+            )
+
+        # Возвращаемся в меню
+        self.stacked_widget.setCurrentWidget(self.main_menu)
+
+    @QtCore.Slot(int)
+    def _on_music_volume_preview(self, value):
+        """Мгновенно меняет громкость музыки при движении слайдера (с коррекцией)."""
+        if hasattr(self, 'bg_audio'):
+            # Квадратичная коррекция (x^2) вместо кубической — чтобы не было слишком тихо на 20-40%
+            self.bg_audio.setVolume((value / 100.0) ** 2)
+
+    @QtCore.Slot(int)
+    def _on_tts_volume_preview(self, value):
+        """Мгновенно меняет громкость голоса (линейно для четкости)."""
+        self.request_set_volume.emit(value / 100.0)
+
+    @QtCore.Slot()
+    def _on_test_voice(self):
+        """Проигрывает тестовую фразу для проверки громкости голоса."""
+        voice_id = "ru-RU-DmitryNeural"
+        rate = self.settings.get_edge_tts_rate()
+        pitch = "+0Hz"
+        self.request_speak.emit(["Проверка громкости голоса оппонента."])
+        # Убеждаемся, что голос настроен правильно (на случай если это первый запуск)
+        self.request_set_voice.emit(voice_id, rate, pitch)
 
     # --- ЛОГИКА АВТОРИЗАЦИИ ---
     @QtCore.Slot(str, str)
@@ -1670,6 +2340,9 @@ class AppController(QtWidgets.QMainWindow):
         self.update_subtitles("Приветствую на Арене Разума! Я Сократ, и мы начинаем наши дебаты.")
         self.update_speaker_name("Сократ")
         
+        # Ensure user avatar is not flipped for tutorial
+        if hasattr(self.debate_screen.user, 'setFlipped'):
+            self.debate_screen.user.setFlipped(False)
 
         self.tutorial_input_dialog = VoiceInputDialog(self.debate_screen, "Ваш ход", "Введите аргумент:", is_tutorial=True)
 
@@ -1759,54 +2432,37 @@ class AppController(QtWidgets.QMainWindow):
 
     @QtCore.Slot()
     def go_to_setup_screen(self):
-        self.topic_input.clear()
+        self.setup_screen.topic_input.clear()
+        self.setup_screen.critique_filepath = None
+        self.setup_screen.file_name_lbl.setText("")
+        self.setup_screen.mode_combo.setCurrentIndex(0)
+        self.setup_screen.show_settings_widget.hide()
+        self.setup_screen.confirm_start_btn.setText("К БАРЬЕРУ")
         self.stacked_widget.setCurrentWidget(self.setup_screen)
 
-    @QtCore.Slot(int)
-    def on_mode_changed(self, index):
-        if index == 1: 
-            self.file_upload_wrapper.show()
-            self.topic_input.setPlaceholderText("Введите ваш тезис или загрузите файл с текстом работы...")
-        else:
-            self.file_upload_wrapper.hide()
-            self.topic_input.setPlaceholderText("Введите тему дебатов...")
-
-    @QtCore.Slot()
-    def upload_critique_file(self):
-        filepath, _ = QtWidgets.QFileDialog.getOpenFileName(
-            self, "Выберите файл", "", "Supported files (*.txt *.pdf *.docx)"
-        )
-        if filepath:
-            self.critique_filepath = filepath
-            import os
-            self.file_name_lbl.setText(os.path.basename(filepath))
-
-    @QtCore.Slot()
-    def start_debate_with_topic(self):
-        raw_topic = self.topic_input.text().strip()
-        is_critique = hasattr(self, 'mode_combo') and self.mode_combo.currentIndex() == 1
+    @QtCore.Slot(bool, str, str, int, int)
+    def start_debate_with_topic(self, is_critique, raw_topic, filepath, time_limit, rounds_count):
+        self.current_time_limit = time_limit
+        self.current_rounds_count = rounds_count
 
         if is_critique:
-            self.confirm_start_btn.setText("Обработка...")
-            self.confirm_start_btn.setEnabled(False)
+            self.setup_screen.set_loading(True)
             QtWidgets.QApplication.processEvents()
             
             attached_text = ""
-            if hasattr(self, 'critique_filepath') and self.critique_filepath:
+            if filepath:
                 import document_parser
-                attached_text = document_parser.extract_text(self.critique_filepath)
+                attached_text = document_parser.extract_text(filepath)
                 if attached_text.startswith("Ошибка"):
                     QtWidgets.QMessageBox.warning(self, "Ошибка файла", attached_text)
-                    self.confirm_start_btn.setText("К БАРЬЕРУ")
-                    self.confirm_start_btn.setEnabled(True)
+                    self.setup_screen.set_loading(False)
                     return
             
             self.critique_full_text = f"{raw_topic}\n\n{attached_text}".strip()
             
             if not self.critique_full_text:
                 QtWidgets.QMessageBox.warning(self, "Пусто", "Введите тезис или прикрепите файл.")
-                self.confirm_start_btn.setText("К БАРЬЕРУ")
-                self.confirm_start_btn.setEnabled(True)
+                self.setup_screen.set_loading(False)
                 return
             
             topic_label = raw_topic if raw_topic else "Защита научной работы"
@@ -1823,9 +2479,11 @@ class AppController(QtWidgets.QMainWindow):
             if not user_pixmap.isNull():
                 self.debate_screen.user.setPixmap(user_pixmap)
                 self.debate_screen.user.setScaledContents(True)
+                # Снимаем отзеркаливание для обычных дебатов
+                if hasattr(self.debate_screen.user, 'setFlipped'):
+                    self.debate_screen.user.setFlipped(False)
 
-            self.confirm_start_btn.setText("К БАРЬЕРУ")
-            self.confirm_start_btn.setEnabled(True)
+            self.setup_screen.set_loading(False)
             self._finalize_debate_start(topic_label, "Академический Рецензент")
             return
             
@@ -1833,8 +2491,7 @@ class AppController(QtWidgets.QMainWindow):
             if not raw_topic:
                 raw_topic = "Искусственный интеллект — благо или угроза?"
 
-            self.confirm_start_btn.setText("Анализирую...")
-            self.confirm_start_btn.setEnabled(False)
+            self.setup_screen.set_loading(True, "Анализирую...")
             QtWidgets.QApplication.processEvents()
 
             self._formatter_thread = TopicFormatterThread(raw_topic, self.deepseek, parent=self)
@@ -1842,8 +2499,7 @@ class AppController(QtWidgets.QMainWindow):
             self._formatter_thread.start()
 
     def _continue_debate_setup(self, formatted_topic):
-        self.confirm_start_btn.setText("К БАРЬЕРУ")
-        self.confirm_start_btn.setEnabled(True)
+        self.setup_screen.set_loading(False)
 
         if formatted_topic.startswith("Ошибка"):
             QtWidgets.QMessageBox.critical(self, "Ошибка", formatted_topic)
@@ -1876,6 +2532,9 @@ class AppController(QtWidgets.QMainWindow):
             if not user_pixmap.isNull():
                 self.debate_screen.user.setPixmap(user_pixmap)
                 self.debate_screen.user.setScaledContents(True)
+                # Снимаем отзеркаливание для обычных дебатов
+                if hasattr(self.debate_screen.user, 'setFlipped'):
+                    self.debate_screen.user.setFlipped(False)
             
             # Запуск дебатов
             self._finalize_debate_start(topic, opponent_name)
@@ -1884,8 +2543,7 @@ class AppController(QtWidgets.QMainWindow):
             if not feedback: 
                 return
             
-            self.confirm_start_btn.setText("Переписываю...")
-            self.confirm_start_btn.setEnabled(False)
+            self.setup_screen.set_loading(True, "Переписываю...")
             QtWidgets.QApplication.processEvents()
             
             current_input = f"Предыдущий вариант темы: {formatted_topic}. ПРАВКА ПОЛЬЗОВАТЕЛЯ: {feedback}"
@@ -1899,7 +2557,12 @@ class AppController(QtWidgets.QMainWindow):
         self.opp_system_prompt = get_opponent_system_prompt(topic, opponent_name)
         self.deepseek.reset_stats()  
         user_name = self.current_user['nickname'] if self.current_user else "Вы"
-        self.engine = DebateManager(topic, user_name, opponent_name)
+
+        time_limit = getattr(self, "current_time_limit", 60)
+        rounds = getattr(self, "current_rounds_count", 3)
+        self.engine = DebateManager(topic, user_name, opponent_name, time_limit, rounds)
+        
+        self.clash_duration_sec = time_limit if time_limit > 0 else 9999
         
         self.play_music("Clockwork Focus.mp3")
 
@@ -1934,14 +2597,21 @@ class AppController(QtWidgets.QMainWindow):
                 {'type': 'end_debate'}
             ])
         else:
-            self.action_queue.extend([
+            queue = [
                 {'type': 'generate_and_speak', 'prompt_func': self.engine.get_setup_prompt,
                  'speaker_name': 'Модератор', 'role': 'moderator'},
                 {'type': 'speech', 'participant': self.engine.p1_name},
                 {'type': 'speak_only', 'speaker_name': 'Модератор', 'text': f'Благодарю. Теперь слово для вступительной речи предоставляется {self.engine.p2_name}.'},
                 {'type': 'speech', 'participant': self.engine.p2_name},
-                {'type': 'clash_round', 'leader': self.engine.p1_name},
-                {'type': 'clash_round', 'leader': self.engine.p2_name},
+            ]
+            
+            is_first_clash = True
+            for _ in range(rounds):
+                queue.append({'type': 'clash_round', 'leader': self.engine.p1_name, 'is_first': is_first_clash})
+                is_first_clash = False
+                queue.append({'type': 'clash_round', 'leader': self.engine.p2_name, 'is_first': False})
+                
+            queue.extend([
                 {'type': 'jury_questions'},
                 {'type': 'summary_statement', 'participant': self.engine.p1_name},
                 {'type': 'summary_statement', 'participant': self.engine.p2_name},
@@ -1949,6 +2619,7 @@ class AppController(QtWidgets.QMainWindow):
                 {'type': 'speak_only', 'speaker_name': 'Модератор', 'text': 'Игра окончена. Спасибо всем участникам дебатов за отличную игру. Переходим к результатам.'},
                 {'type': 'end_debate'}
             ])
+            self.action_queue.extend(queue)
 
         self.process_next_action()
 
@@ -1967,6 +2638,8 @@ class AppController(QtWidgets.QMainWindow):
         if action_type == 'generate_and_speak':
             prompt = action['prompt_func'](**action.get('prompt_args', {}))
             self._set_voice_for_speaker(action['speaker_name'])
+            self.update_speaker_name(action['speaker_name'])
+            self.update_subtitles(f"{action['speaker_name']} готовится...")
             role = action.get('role', 'moderator')
             system_prompt = MODERATOR_PROMPT if role == 'moderator' else self.opp_system_prompt
             self.request_stream_start.emit()
@@ -2006,6 +2679,8 @@ class AppController(QtWidgets.QMainWindow):
             else:
                 prompt = self.engine.get_summary_prompt(for_opponent=True)
                 self._set_voice_for_speaker(participant_name)
+                self.update_speaker_name(participant_name)
+                self.update_subtitles(f"{participant_name} обдумывает заключительное слово...")
                 self.request_stream_start.emit()
                 self.request_generation.emit(prompt, None, {
                     'speaker_name': participant_name, 'is_stream': True,
@@ -2042,10 +2717,12 @@ class AppController(QtWidgets.QMainWindow):
                 rag_memory = get_philosopher_context(self.engine.opponent_name, self.last_user_speech, top_k=3)
                 if hasattr(self, 'deepseek'):
                     self.deepseek.log_rag_citation(rag_memory)
-                prompt = raw_prompt + f"\n\n[СПРАВОЧНАЯ ИНФОРМАЦИЯ ИЗ ТВОИХ ТРУДОВ]\n(Используй эти данные мягко и органично, только если они релевантны. Не цитируй дословно, если это вредит естественности диалога. Сохраняй свой живой характер.)\nКонтекст:\n{rag_memory}\n[КОНЕЦ ИНФОРМАЦИИ]"
+                prompt =  f"\n\n[СПРАВОЧНАЯ ИНФОРМАЦИЯ ИЗ ТВОИХ ТРУДОВ]\n(Используй эти данные мягко и органично, только если они релевантны. Не цитируй дословно, если это вредит естественности диалога. Сохраняй свой живой характер.)\nКонтекст:\n{rag_memory}\n[КОНЕЦ ИНФОРМАЦИИ]" + raw_prompt 
 
                 
             self._set_voice_for_speaker(self.engine.opponent_name)
+            self.update_speaker_name(self.engine.opponent_name)
+            self.update_subtitles("Размышляю...")
             self.request_stream_start.emit()
             self.request_generation.emit(prompt, None, {
                 'speaker_name': self.engine.opponent_name, 'is_stream': True,
@@ -2063,6 +2740,72 @@ class AppController(QtWidgets.QMainWindow):
             
         callback = metadata.get('callback_action')
         speaker_name = metadata.get('speaker_name', 'Система')
+        is_show = metadata.get('is_show', False)
+
+        # ═══ Обработка ШОУ ═══
+        if is_show and callback == 'show_announce_winner':
+            from agents import JURY_PROMPT
+            import json
+            try:
+                data = json.loads(text)
+                self.show_verdict_data = data
+                self.verdict_data = data # Для PDF
+                self._show_winner_name = data.get('winner', 'Ничья')
+                
+                # Запускаем цепочку оглашения (Баллы -> Победа)
+                self.verdict_announcement_step = 'SCORES_MATTER'
+                
+                # Подменяем engine на время оглашения, чтобы работали анонсеры
+                original_engine = self.engine
+                self.engine = self.show_engine
+                self._show_verdict_announcer_original_engine = original_engine
+                
+                self.update_speaker_name("Жюри")
+                self._process_verdict_announcement() 
+            except Exception as e:
+                print(f"Error parsing show verdict: {e}")
+                self._show_end_debate_screen("Ошибка при вынесении вердикта.")
+            return
+
+        if is_show and callback == 'show_handle_jury_questions':
+            try:
+                clean = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL)
+                start_idx = clean.find('{')
+                end_idx = clean.rfind('}')
+                if start_idx != -1 and end_idx != -1:
+                    clean = clean[start_idx:end_idx+1]
+                jq = json.loads(clean)
+                # Жюри спрашивает P1
+                q1 = jq.get('question_for_p1', 'Нет вопроса')
+                q2 = jq.get('question_for_p2', 'Нет вопроса')
+                self.show_engine._add_to_transcript('Жюри', f'Вопрос для {self.show_engine.p1_name}: {q1}')
+                self.show_engine._add_to_transcript('Жюри', f'Вопрос для {self.show_engine.p2_name}: {q2}')
+                # Вставляем в очередь ответы обоих
+                q_actions = [
+                    {'type': 'show_speak_only', 'speaker': 'Жюри', 'text': f'Вопрос для {self.show_engine.p1_name}: {q1}'},
+                    {'type': 'show_generate', 'speaker': self.show_engine.p1_name, 'system': 'p1',
+                     'prompt_func': 'jury_answer', 'prompt': self.show_engine.get_jury_answer_prompt(q1)},
+                    {'type': 'show_speak_only', 'speaker': 'Жюри', 'text': f'Вопрос для {self.show_engine.p2_name}: {q2}'},
+                    {'type': 'show_generate', 'speaker': self.show_engine.p2_name, 'system': 'p2',
+                     'prompt_func': 'jury_answer', 'prompt': self.show_engine.get_jury_answer_prompt(q2)},
+                ]
+                self.show_action_queue = q_actions + self.show_action_queue
+                self._show_process_next()
+            except Exception as e:
+                print(f"SHOW ERROR parsing jury questions: {e}. Raw: {text}")
+                self._show_process_next()
+            return
+
+        if is_show and not callback:
+            # Обычная генерация речи в шоу (вступление, клэш, заключение)
+            clean_text = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL).strip()
+            self.show_engine._add_to_transcript(speaker_name, clean_text)
+            self.update_speaker_name(speaker_name)
+            self.show_last_speech = clean_text
+            # Озвучка обработается через stream -> on_sequence_finished
+            return
+
+        # ═══ Обычные коллбэки тренировочных дебатов ═══
 
         if callback == 'handle_topic_format':
             self._continue_debate_setup(text.strip())
@@ -2094,6 +2837,34 @@ class AppController(QtWidgets.QMainWindow):
                 if start_idx != -1 and end_idx != -1:
                     clean = clean[start_idx:end_idx+1]
                 self.verdict_data = json.loads(clean)
+                
+                # --- ИЗМЕНЕНИЕ 2: Программный подсчёт total ---
+                if 'user_scores' in self.verdict_data and 'opponent_scores' in self.verdict_data:
+                    for role_key in ['user_scores', 'opponent_scores']:
+                        scores = self.verdict_data[role_key]
+                        matter = (scores.get('matter_argumentation', 0) + scores.get('matter_clash', 0) + 
+                                  scores.get('matter_answers', 0) + scores.get('matter_consistency', 0))
+                        manner = scores.get('manner_rhetoric', 0) + scores.get('manner_language', 0)
+                        method = (scores.get('method_coherence', 0) + scores.get('method_targeting', 0) + 
+                                  scores.get('method_questions', 0))
+                        total = matter + manner + method
+                        
+                        scores['matter'] = matter  
+                        scores['manner'] = manner
+                        scores['method'] = method
+                        scores['total'] = total
+                        
+                    u_total = self.verdict_data['user_scores']['total']
+                    o_total = self.verdict_data['opponent_scores']['total']
+                    
+                    if abs(u_total - o_total) <= 2:
+                        self.verdict_data['winner'] = "Ничья"
+                    elif u_total > o_total:
+                        self.verdict_data['winner'] = self.engine.user_name if hasattr(self.engine, 'user_name') and self.engine.user_name else "Пользователь"
+                    else:
+                        self.verdict_data['winner'] = self.engine.opponent_name if hasattr(self.engine, 'opponent_name') and self.engine.opponent_name else "Оппонент"
+                # ----------------------------------------------
+                
                 self.update_speaker_name("Жюри")
 
                 is_3m = metadata.get('is_3m', False)
@@ -2141,16 +2912,30 @@ class AppController(QtWidgets.QMainWindow):
             return
 
         is_clash = metadata.get('is_clash_turn', False)
-        if is_clash and self.state != "CLASH_ACTIVE": return
+        if is_clash:
+            if self.clash_timer.isActive():
+                self.clash_timer.stop()
+            if self.state != "CLASH_ACTIVE": return
+            self.last_clash_speech = text
 
         self.engine._add_to_transcript(speaker_name, text)
         self.update_speaker_name(speaker_name)
-        if self.state == "CLASH_ACTIVE": self.last_clash_speech = text
         if not metadata.get('is_stream'):
             self.request_speak.emit([text])
 
     @QtCore.Slot()
     def on_sequence_finished(self):
+        # ═══ Обработка ШОУ ═══
+        if getattr(self, '_show_pending', False):
+            self._show_pending = False
+            if getattr(self, 'show_state', '') == 'SHOW_WAITING_VERDICT':
+                self._show_launch_ai_verdict()
+                return
+            if getattr(self, 'show_state', '') == 'SHOW_FLOW':
+                self._show_process_next()
+                return
+
+        # ═══ Обычные дебаты ═══
         if self.clash_ending_pending:
             self.clash_ending_pending = False
             self._on_clash_round_finished()
@@ -2174,6 +2959,8 @@ class AppController(QtWidgets.QMainWindow):
             q = self.pending_jury_questions.get('question_for_opponent', "")
             prompt = self.engine.get_jury_answer_prompt(q, for_opponent=True)
             self.jury_phase_step = 'WAITING_FOR_OPPONENT_ANSWER'
+            self.update_speaker_name(self.engine.opponent_name)
+            self.update_subtitles(f"{self.engine.opponent_name} обдумывает ответ...")
             self.request_generation.emit(prompt, None, {
                 'speaker_name': self.engine.opponent_name,
                 'deepseek_manager': self.deepseek, 'system_prompt': self.opp_system_prompt, 'role': 'opponent'
@@ -2281,6 +3068,8 @@ class AppController(QtWidgets.QMainWindow):
 
         if self.state == "WAITING_FOR_JURY_PROMPT":
             self.state = "DEBATE_FLOW"
+            self.update_speaker_name("Жюри")
+            self.update_subtitles("Жюри формулирует вопросы...")
             self.request_generation.emit(self.engine.get_jury_questions_prompt(), None, {
                 'speaker_name': 'Жюри', 'callback_action': 'handle_jury_questions',
                 'deepseek_manager': self.deepseek, 'system_prompt': JURY_PROMPT, 'role': 'jury'
@@ -2295,6 +3084,7 @@ class AppController(QtWidgets.QMainWindow):
             print("[RAG Jury] Проверяем факты участников...")
             recent_claims = " ".join(self.engine.transcript[-4:])
             search_query = f"проверка фактов {recent_claims[:100]}"
+            from rag_retriever import get_web_context
             jury_facts = get_web_context([search_query], max_results_per_query=2)
             if hasattr(self, 'deepseek'):
                 self.deepseek.log_rag_citation(jury_facts)
@@ -2306,7 +3096,8 @@ class AppController(QtWidgets.QMainWindow):
                 
             prompt = raw_prompt + f"\n\n[БЛОК ПРОВЕРКИ ФАКТОВ В СЕТИ — GROUND TRUTH]\nРезультаты онлайн-поиска (учитывай их при выставлении баллов за Matter):\n{jury_facts}\n[КОНЕЦ БЛОКА ПРОВЕРКИ ФАКТОВ]"
      
-
+            self.update_speaker_name("Жюри")
+            self.update_subtitles("Жюри подводит итоги и выставляет оценки...")
             self.request_generation.emit(prompt, None, {
                 'speaker_name': 'Жюри', 
                 'callback_action': 'announce_winner',
@@ -2317,18 +3108,39 @@ class AppController(QtWidgets.QMainWindow):
 
         if self.state == "CLASH_INTRO":
             self._begin_clash_timer_and_turns()
+            return
         elif self.state == "CLASH_ACTIVE":
-            self._process_clash_turn()
+            if self.clash_turns_done >= 2:
+                self._on_clash_round_finished()
+            else:
+                self._process_clash_turn()
+            return
+
         elif self.state in ["CLASH_ENDING", "CLASH_TRANSITION", "DEBATE_FLOW"]:
             self.process_next_action()
+
 
     def _start_clash_round(self, action):
         self.state = "CLASH_INTRO"
         self.clash_leader = action['leader']
         self.clash_responder = self.engine.p2_name if self.clash_leader == self.engine.p1_name else self.engine.p1_name
         self.current_clash_turn_holder = self.clash_leader
+        self.clash_turns_done = 0
         self.update_speaker_name("Модератор")
-        self.request_speak.emit([f"Раунд полемики. Ведущий — {self.clash_leader}."])
+        
+        if action.get('is_first', False):
+            user_opening = self.last_user_speech if hasattr(self, 'last_user_speech') else "не озвучена"
+            opponent_opening = "не озвучена"
+            for t in self.engine.transcript:
+                if t.startswith(f"[{self.engine.opponent_name}]:"):
+                    opponent_opening = t.split("]: ", 1)[-1]
+                    break
+            self.engine.set_positions_after_opening(user_opening, opponent_opening)
+            text = f"Начинается раунд полемики. Ведущий — {self.clash_leader}."
+        else:
+            text = f"Право на встречный вопрос переходит к: {self.clash_leader}."
+        
+        self.request_speak.emit([text])
 
     def _begin_clash_timer_and_turns(self):
         self.state = "CLASH_ACTIVE"
@@ -2337,38 +3149,73 @@ class AppController(QtWidgets.QMainWindow):
         self._process_clash_turn()
 
     def _process_clash_turn(self):
-        if not self.clash_timer.isActive() and not self.clash_ending_pending: return
+        """Управляет очередностью ходов внутри раунда полемики."""
+        if self.state != "CLASH_ACTIVE": return
+        
+        # Обнуляем/запускаем таймер для НОВОГО хода
+        self.clash_time_left = self.clash_duration_sec
+        self.clash_timer.start()
 
         if self.current_clash_turn_holder == self.engine.user_name:
-            text = self.get_user_input("Полемика", "Ваш короткий ответ/вопрос:")
+            # Ход игрока
+            text = self.get_user_input("Полемика", "Ваш короткий ответ/вопрос (время ограничено!):")
+            
+            # Как только игрок нажал "Отправить", останавливаем таймер досрочно
+            self.clash_timer.stop()
+            
             if text:
                 self.last_clash_speech = text
                 self.update_speaker_name(self.engine.user_name)
                 self.engine._add_to_transcript(self.engine.user_name, text)
                 self.update_subtitles(text)
+                self.clash_turns_done += 1
+                # Смена хода
+                self.current_clash_turn_holder = self.clash_responder if self.current_clash_turn_holder == self.clash_leader else self.clash_leader
+                # Переходим к следующему ходу (озвучки нет, так как это игрок)
                 QtCore.QTimer.singleShot(500, self.on_sequence_finished)
+            else:
+                # Если игрок отменил ввод - считаем пропуском или концом раунда
+                self._on_clash_round_finished()
         else:
+            # Ход ИИ-оппонента
             is_leader = (self.current_clash_turn_holder == self.clash_leader)
             if is_leader:
                 raw_prompt = self.engine.get_clash_leader_prompt(self.last_clash_speech)
+                # TODO: validated = deepseek.validate_attack_question(raw_reply, debate_manager.opponent_declared_position, debate_manager.user_declared_position)
             else:
                 raw_prompt = self.engine.get_clash_responder_prompt(self.last_clash_speech)
-                
-     
-            print(f"[RAG Clash] Извлекаем контекст для: {self.current_clash_turn_holder}")
+            
+            # RAG контекст
             rag_memory = get_philosopher_context(self.current_clash_turn_holder, self.last_clash_speech, top_k=2)
-            prompt =  f"\n\n[СПРАВОЧНАЯ ИНФОРМАЦИЯ ИЗ ТВОИХ ТРУДОВ]\n(Используй эти данные мягко и органично, только если они релевантны. Не цитируй дословно, если это вредит естественности диалога. Сохраняй свой живой характер. О)\nКонтекст:\n{rag_memory}\n[КОНЕЦ ИНФОРМАЦИИ И не забывай что задавать тебе вопрос или отвечать не на жти цитаты, а на позицию игрока!!!  Она дальше вот идёт]" + raw_prompt
-        
+            
+            # ЗАЩИТА ОТ RECENCY BIAS: Сначала даем цитаты, затем жесткую инструкцию по их интерпретации
+            prompt = (
+                f"=== БАЗА ЗНАНИЙ (ТВОИ ИСТОРИЧЕСКИЕ ТРУДЫ) ===\n"
+                f"{rag_memory}\n"
+                f"=============================================\n\n"
+                f"[ИНСТРУКЦИЯ ПО РАБОТЕ С БАЗОЙ ЗНАНИЙ]:\n"
+                f"Выше приведены твои реальные цитаты и концепции. ВНИМАНИЕ: твоя текущая стратегическая роль в этих дебатах "
+                f"может прямо противоречить твоим историческим взглядам. Если это так, тебе СТРОГО ЗАПРЕЩЕНО критиковать или отрицать свои труды. "
+                f"Вместо этого прояви гениальность софиста: переосмысли, искази или интерпретируй свои же концепции парадоксальным образом так, "
+                f"чтобы они блестяще подтверждали твою ТЕКУЩУЮ позицию в споре.\n\n"
+                f"[ТВОЯ ЗАДАЧА НА ЭТОТ ХОД]:\n"
+                f"{raw_prompt}"
+            )
+            
+            actual_speaker = self.current_clash_turn_holder
+            self.clash_turns_done += 1
+            # Смена хода для следующей итерации
+            self.current_clash_turn_holder = self.clash_responder if self.current_clash_turn_holder == self.clash_leader else self.clash_leader
 
-            self._set_voice_for_speaker(self.current_clash_turn_holder)
+            self._set_voice_for_speaker(actual_speaker)
+            self.update_speaker_name(actual_speaker)
+            self.update_subtitles("Размышляю...")
             self.request_stream_start.emit()
             self.request_generation.emit(prompt, None, {
-                'speaker_name': self.current_clash_turn_holder, 'is_clash_turn': True, 'is_stream': True,
-                'deepseek_manager': self.deepseek, 'system_prompt': self.opp_system_prompt, 'role': 'opponent'
+                'speaker_name': actual_speaker, 'is_clash_turn': True, 'is_stream': True,
+                'deepseek_manager': self.deepseek, 'system_prompt': self.opp_system_prompt, 'role': 'opponent',
+                'use_chat_model': is_leader
             })
-
-        self.current_clash_turn_holder = self.clash_responder if self.current_clash_turn_holder == self.clash_leader else self.clash_leader
-
     def on_clash_timer_tick(self):
         self.clash_time_left -= 1
         m, s = divmod(self.clash_time_left, 60)
@@ -2381,9 +3228,11 @@ class AppController(QtWidgets.QMainWindow):
                 self._on_clash_round_finished()
 
     def _on_clash_round_finished(self):
+        if self.clash_timer.isActive():
+            self.clash_timer.stop()
+        self.debate_screen.time.setText("")
         self.state = "CLASH_ENDING"
-        self.update_speaker_name("Модератор")
-        self.request_speak.emit(["Время раунда истекло."])
+        QtCore.QTimer.singleShot(100, self.on_sequence_finished)
 
     def _handle_summary_statement(self, participant_name):
         intro = f"Заключение от {participant_name}."
@@ -2475,7 +3324,11 @@ class AppController(QtWidgets.QMainWindow):
         if file_path:
             try:
                 winner = self.engine.user_name if getattr(self, 'is_user_win', False) else self.engine.opponent_name
-                generate_debate_report(self.engine.transcript, self.engine.topic, winner, file_path)
+                
+                # Собираем данные вердикта для детальной отрисовки
+                v_data = getattr(self, 'verdict_data', None)
+                
+                generate_debate_report(self.engine.transcript, self.engine.topic, winner, v_data, file_path)
                 QMessageBox.information(self, "Успех", f"Отчет успешно сохранен:\n{file_path}")
             except Exception as e:
                 QMessageBox.critical(self, "Ошибка", f"Не удалось сохранить PDF:\n{e}")
@@ -2484,6 +3337,374 @@ class AppController(QtWidgets.QMainWindow):
         self.post_debate_overlay.deleteLater()
         self.post_debate_overlay = None
         self.stacked_widget.setCurrentWidget(self.main_menu)
+
+    # ═══════════════════════════════════════════════════════
+    # РЕЖИМ «ШОУ: ИИ vs ИИ» — ПОЛНАЯ ЛОГИКА
+    # ═══════════════════════════════════════════════════════
+
+    @QtCore.Slot(str, str, str, str, int)
+    def start_show_debate(self, raw_topic, p1_name, p2_name, role, rounds):
+        """Запускает режим ШОУ: форматирует тему, затем начинает шоу-дебаты."""
+        self.show_role = role  # 'spectator' или 'jury'
+        self.show_p1_name = p1_name
+        self.show_p2_name = p2_name
+        self.show_rounds = rounds
+
+        if not raw_topic:
+            raw_topic = "Искусственный интеллект — благо или угроза?"
+
+        self.setup_screen.set_loading(True, "Анализирую тему...")
+        QtWidgets.QApplication.processEvents()
+
+        self._show_formatter_thread = TopicFormatterThread(raw_topic, self.deepseek, parent=self)
+        self._show_formatter_thread.topic_ready.connect(self._show_continue_setup)
+        self._show_formatter_thread.start()
+
+    def _show_continue_setup(self, formatted_topic):
+        self.setup_screen.set_loading(False)
+        if formatted_topic.startswith("Ошибка") or formatted_topic == "ERROR":
+            QtWidgets.QMessageBox.warning(self, "Ошибка", "Тема не распознана. Попробуйте другую формулировку.")
+            return
+        if formatted_topic == "ERROR_FACT":
+            QtWidgets.QMessageBox.warning(self, "Неподходящая тема", "Тема является неоспоримым фактом. Выберите дискуссионную тему.")
+            return
+
+        dialog = CustomConfirmDialog(self, formatted_topic)
+        if dialog.exec():
+            self._start_show_flow(formatted_topic)
+        else:
+            feedback = self.get_user_input("Уточнение", "Что именно нужно изменить в теме?")
+            if not feedback:
+                return
+            self.setup_screen.set_loading(True, "Переписываю...")
+            QtWidgets.QApplication.processEvents()
+            current_input = f"Предыдущий вариант темы: {formatted_topic}. ПРАВКА ПОЛЬЗОВАТЕЛЯ: {feedback}"
+            self._show_formatter_thread = TopicFormatterThread(current_input, self.deepseek, parent=self)
+            self._show_formatter_thread.topic_ready.connect(self._show_continue_setup)
+            self._show_formatter_thread.start()
+
+    def _start_show_flow(self, topic):
+        """Инициализирует ShowDebateManager и запускает полностью автономную цепочку генераций."""
+        p1 = self.show_p1_name
+        p2 = self.show_p2_name
+        rounds = self.show_rounds
+
+        # Первый выбранный = первый спикер
+        starter = p1
+        responder = p2
+        starter_sys_key = 'p1'
+        responder_sys_key = 'p2'
+
+        # Переключаемся на debate_screen
+        self.stacked_widget.setCurrentWidget(self.debate_screen)
+
+        # Аватары
+        p1_avatar = self.AVATAR_MAP.get(p1, "assets/kant.png")
+        p2_avatar = self.AVATAR_MAP.get(p2, "assets/kant.png")
+        pix1 = QtGui.QPixmap(p1_avatar)
+        pix2 = QtGui.QPixmap(p2_avatar)
+        if pix1.isNull(): pix1 = QtGui.QPixmap("assets/kant.png")
+        if pix2.isNull(): pix2 = QtGui.QPixmap("assets/kant.png")
+        
+        self.debate_screen.user.setPixmap(pix1)
+        self.debate_screen.user.setScaledContents(True)
+        self.debate_screen.user.setFlipped(True) # Отзеркаливаем левого оппонента в шоу
+        
+        self.debate_screen.opp.setPixmap(pix2)
+        self.debate_screen.opp.setScaledContents(True)
+
+        # Менеджер
+        self.show_engine = ShowDebateManager(topic, p1, p2, rounds)
+        
+        # Системные промпты по новой логике
+        from agents import get_show_opponent_system_prompt
+        self.show_p1_system = get_show_opponent_system_prompt(topic, p1, p2)
+        self.show_p2_system = get_show_opponent_system_prompt(topic, p2, p1)
+        
+        self.deepseek.reset_stats()
+
+        self.play_music("Clockwork Focus.mp3")
+
+        if hasattr(self.debate_screen, 'subtitletopicLabel'):
+            self.update_speaker_name("Модератор")
+        if hasattr(self.debate_screen, 'subtitleLabel'):
+            self.debate_screen.subtitleLabel.setText("Идет подготовка к шоу...")
+        if hasattr(self.debate_screen, 'topic'):
+            self.debate_screen.topic.setText(topic)
+            self.debate_screen.topic.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter)
+
+        self.debate_screen.time.setText("")
+        self.show_state = "SHOW_FLOW"
+        self.show_action_queue = []
+        self.show_last_speech = ""
+
+        # Собираем action_queue для шоу
+        queue = []
+
+        # Фаза 1: Вступительные речи
+        queue.append({'type': 'show_speak_only', 'speaker': 'Модератор',
+                      'text': f'Добро пожаловать на Шоу «ИИ vs ИИ»! Тема дебатов: {topic}. Сегодня дебатируют {p1} и {p2}. Слово для вступительной речи предоставляется {starter}.'})
+        queue.append({'type': 'show_generate', 'speaker': starter, 'system': starter_sys_key,
+                      'prompt_func': 'opening', 'prompt_arg': ''})
+        queue.append({'type': 'show_speak_only', 'speaker': 'Модератор',
+                      'text': f'Благодарю. Слово для вступительной речи предоставляется {responder}.'})
+        queue.append({'type': 'show_generate', 'speaker': responder, 'system': responder_sys_key,
+                      'prompt_func': 'opening', 'prompt_arg': '_opponent_opening_'})
+        queue.append({'type': 'show_set_positions'})
+
+        # Фаза 2: Полемика (чередование)
+        for r in range(rounds):
+            if r % 2 == 0:
+                attacker, defender = starter, responder
+            else:
+                attacker, defender = responder, starter
+            queue.append({'type': 'show_speak_only', 'speaker': 'Модератор',
+                          'text': f'Раунд {r+1} полемики. Ведущий — {attacker}.'})
+            queue.append({'type': 'show_clash_attack', 'attacker': attacker, 'defender': defender})
+            queue.append({'type': 'show_clash_defend', 'attacker': attacker, 'defender': defender})
+
+        # Фаза 3: Вопросы от жюри
+        queue.append({'type': 'show_speak_only', 'speaker': 'Модератор',
+                      'text': 'Раунды полемики завершены. Слово жюри.'})
+        queue.append({'type': 'show_jury_questions'})
+
+        # Фаза 4: Заключительные слова
+        queue.append({'type': 'show_speak_only', 'speaker': 'Модератор',
+                      'text': f'Заключительное слово от {starter}.'})
+        queue.append({'type': 'show_generate', 'speaker': starter, 'system': starter_sys_key,
+                      'prompt_func': 'summary'})
+        queue.append({'type': 'show_speak_only', 'speaker': 'Модератор',
+                      'text': f'Заключительное слово от {responder}.'})
+        queue.append({'type': 'show_generate', 'speaker': responder, 'system': responder_sys_key,
+                      'prompt_func': 'summary'})
+
+        # Финал: ставка/жюри
+        queue.append({'type': 'show_pre_verdict'})
+
+        self.show_action_queue = queue
+        self._show_process_next()
+
+    def _show_process_next(self):
+        if self.show_state != "SHOW_FLOW":
+            return
+        if not self.show_action_queue:
+            return
+        QtCore.QTimer.singleShot(500, self._show_exec_action)
+
+    def _show_exec_action(self):
+        if not self.show_action_queue:
+            return
+        action = self.show_action_queue.pop(0)
+        t = action['type']
+
+        if t == 'show_speak_only':
+            self._set_voice_for_speaker(action['speaker'])
+            self.update_speaker_name(action['speaker'])
+            sentences = [s for s in SENTENCE_SPLIT_RE.split(action['text'].strip()) if s]
+            # Сохраняем контекст шоу для on_sequence_finished
+            self._show_pending = True
+            self.request_speak.emit(sentences)
+
+        elif t == 'show_generate':
+            speaker = action['speaker']
+            sys_key = action['system']  # 'p1' or 'p2'
+            system_prompt = self.show_p1_system if sys_key == 'p1' else self.show_p2_system
+            func = action['prompt_func']
+
+            if func == 'opening':
+                arg = action.get('prompt_arg', '')
+                if arg == '_opponent_opening_':
+                    # Ищем вступительную речь оппонента в стенограмме
+                    opponent_name = self.show_engine.p1_name if speaker == self.show_engine.p2_name else self.show_engine.p2_name
+                    opponent_opening = ''
+                    for entry in self.show_engine.transcript:
+                        if entry.startswith(f'[{opponent_name}]:'):
+                            opponent_opening = entry.split(']: ', 1)[-1]
+                            break
+                    prompt = self.show_engine.get_opening_prompt(opponent_opening)
+                else:
+                    prompt = self.show_engine.get_opening_prompt('')
+            elif func == 'summary':
+                prompt = self.show_engine.get_summary_prompt()
+            elif func == 'jury_answer':
+                prompt = action['prompt']
+            else:
+                prompt = ''
+
+            self._set_voice_for_speaker(speaker)
+            self.update_speaker_name(speaker)
+            self.update_subtitles(f"{speaker} размышляет...")
+            self._show_pending = True
+            self.request_stream_start.emit()
+            self.request_generation.emit(prompt, None, {
+                'speaker_name': speaker, 'is_stream': True, 'is_show': True,
+                'deepseek_manager': self.deepseek, 'system_prompt': system_prompt, 'role': 'opponent'
+            })
+
+        elif t == 'show_set_positions':
+            p1_opening = ''
+            p2_opening = ''
+            for entry in self.show_engine.transcript:
+                if entry.startswith(f'[{self.show_engine.p1_name}]:') and not p1_opening:
+                    p1_opening = entry.split(']: ', 1)[-1]
+                elif entry.startswith(f'[{self.show_engine.p2_name}]:') and not p2_opening:
+                    p2_opening = entry.split(']: ', 1)[-1]
+            self.show_engine.set_positions_after_opening(p1_opening, p2_opening)
+            self._show_process_next()
+
+        elif t == 'show_clash_attack':
+            attacker = action['attacker']
+            defender = action['defender']
+            sys_key = 'p1' if attacker == self.show_engine.p1_name else 'p2'
+            system_prompt = self.show_p1_system if sys_key == 'p1' else self.show_p2_system
+            prompt = self.show_engine.get_clash_leader_prompt(self.show_last_speech, attacker, defender)
+
+            self._set_voice_for_speaker(attacker)
+            self.update_speaker_name(attacker)
+            self.update_subtitles(f"{attacker} готовит вопрос...")
+            self._show_pending = True
+            self.request_stream_start.emit()
+            self.request_generation.emit(prompt, None, {
+                'speaker_name': attacker, 'is_stream': True, 'is_show': True,
+                'deepseek_manager': self.deepseek, 'system_prompt': system_prompt, 'role': 'opponent',
+                'use_chat_model': True
+            })
+
+        elif t == 'show_clash_defend':
+            defender = action['defender']
+            sys_key = 'p1' if defender == self.show_engine.p1_name else 'p2'
+            system_prompt = self.show_p1_system if sys_key == 'p1' else self.show_p2_system
+            prompt = self.show_engine.get_clash_responder_prompt(self.show_last_speech)
+
+            self._set_voice_for_speaker(defender)
+            self.update_speaker_name(defender)
+            self.update_subtitles(f"{defender} отвечает...")
+            self._show_pending = True
+            self.request_stream_start.emit()
+            self.request_generation.emit(prompt, None, {
+                'speaker_name': defender, 'is_stream': True, 'is_show': True,
+                'deepseek_manager': self.deepseek, 'system_prompt': system_prompt, 'role': 'opponent'
+            })
+
+        elif t == 'show_jury_questions':
+            self.update_speaker_name("Жюри")
+            self.update_subtitles("Жюри формулирует вопросы...")
+            self._show_pending = True
+            self.request_generation.emit(self.show_engine.get_jury_questions_prompt(), None, {
+                'speaker_name': 'Жюри', 'callback_action': 'show_handle_jury_questions',
+                'is_show': True,
+                'deepseek_manager': self.deepseek, 'system_prompt': JURY_PROMPT, 'role': 'jury'
+            })
+
+        elif t == 'show_pre_verdict':
+            self._show_pre_verdict()
+
+    def _show_pre_verdict(self):
+        """Показывает блок ставки (Зритель) или оценивание (Жюри) после всех фаз."""
+        if self.show_role == 'spectator':
+            # Ставка
+            dialog = BetDialog(self.show_engine.p1_name, self.show_engine.p2_name, self)
+            dialog.exec()
+            self.show_user_bet = dialog.choice or "Ничья"
+            # Запускаем ИИ-жюри
+            self.update_speaker_name("Модератор")
+            self.update_subtitles("Наступает момент оглашения вердикта...")
+            self._show_pending = True
+            self.request_speak.emit(["Наступает момент оглашения вердикта."])
+            self.show_state = "SHOW_WAITING_VERDICT"
+        elif self.show_role == 'jury':
+            # Переходим на экран оценивания
+            self.jury_eval_screen.start_evaluation(
+                self.show_engine.p1_name,
+                self.show_engine.p2_name,
+                self.show_engine.transcript
+            )
+            self.stacked_widget.setCurrentWidget(self.jury_eval_screen)
+
+    def _show_launch_ai_verdict(self):
+        """Запускает ИИ-жюри для шоу (режим Зритель)."""
+        self.show_state = "SHOW_FLOW"
+        raw_prompt = self.show_engine.get_3m_verdict_prompt()
+        self.update_speaker_name("Жюри")
+        self.update_subtitles("Жюри выносит вердикт...") # БАГ 1: Показываем индикатор
+        self.request_generation.emit(raw_prompt, None, {
+            'speaker_name': 'Жюри',
+            'callback_action': 'show_announce_winner',
+            'is_show': True,
+            'use_chat_model': True, # БАГ 1: Используем MODEL_CHAT для скорости
+            'deepseek_manager': self.deepseek, 'system_prompt': JURY_PROMPT, 'role': 'jury'
+        })
+
+    def _handle_show_jury_complete(self, scores, winner):
+        """Обработчик завершения ручного оценивания (режим Жюри)."""
+        # Начислить монеты
+        if self.current_user:
+            self.db.add_coins(self.current_user['id'], 5)
+            self.update_main_menu_info()
+
+        # Показываем финальный экран
+        self.stacked_widget.setCurrentWidget(self.debate_screen)
+        self._show_end_debate_screen(f"Ваш вердикт: {winner}", 5)
+
+    def _show_end_debate_screen(self, verdict_text, coins=0):
+        """Показывает финальный оверлей шоу."""
+        self.show_state = "IDLE"
+        self.deepseek.print_game_stats()
+
+        overlay = QtWidgets.QFrame(self.debate_screen)
+        overlay.setGeometry(0, 0, self.debate_screen.width(), self.debate_screen.height())
+        overlay.setStyleSheet("background-color: rgba(0, 0, 0, 220);")
+        self.post_debate_overlay = overlay
+
+        layout = QtWidgets.QVBoxLayout(overlay)
+        layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.setSpacing(25)
+
+        title = QtWidgets.QLabel(verdict_text)
+        title.setStyleSheet("color: #ffca28; font-size: 42px; font-weight: bold; background: transparent;")
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        title.setWordWrap(True)
+        layout.addWidget(title)
+
+        if coins > 0:
+            coins_lbl = QtWidgets.QLabel(f"+{coins} аргуконов 🎉")
+            coins_lbl.setStyleSheet("color: #a5d6a7; font-size: 32px; font-weight: bold; background: transparent;")
+            coins_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            layout.addWidget(coins_lbl)
+
+        btn_layout = QtWidgets.QVBoxLayout()
+        btn_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        btn_layout.setSpacing(15)
+
+        pdf_btn = QtWidgets.QPushButton("Скачать отчет (PDF)")
+        pdf_btn.setFixedSize(300, 60)
+        pdf_btn.setStyleSheet("QPushButton { background-color: #2196F3; color: white; font-size: 20px; font-weight: bold; border-radius: 10px; border: 2px solid #1976D2; } QPushButton:hover { background-color: #1E88E5; }")
+        pdf_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        pdf_btn.clicked.connect(self._show_export_pdf)
+        btn_layout.addWidget(pdf_btn)
+
+        exit_btn = QtWidgets.QPushButton("В главное меню")
+        exit_btn.setFixedSize(300, 60)
+        exit_btn.setStyleSheet("QPushButton { background-color: #757575; color: white; font-size: 20px; font-weight: bold; border-radius: 10px; border: 2px solid #616161; } QPushButton:hover { background-color: #616161; }")
+        exit_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        exit_btn.clicked.connect(self._return_to_main_menu_from_debate)
+        btn_layout.addWidget(exit_btn)
+
+        layout.addLayout(btn_layout)
+        overlay.show()
+
+    def _show_export_pdf(self):
+        from pdf_generator import generate_debate_report
+        from PySide6.QtWidgets import QFileDialog, QMessageBox
+        file_path, _ = QFileDialog.getSaveFileName(self, "Сохранить отчет", "show_debate_report.pdf", "PDF Files (*.pdf)")
+        if file_path:
+            try:
+                winner = getattr(self, '_show_winner_name', 'Ничья')
+                v_data = getattr(self, 'show_verdict_data', None)
+                generate_debate_report(self.show_engine.transcript, self.show_engine.topic, winner, v_data, file_path)
+                QMessageBox.information(self, "Успех", f"Отчет успешно сохранен:\n{file_path}")
+            except Exception as e:
+                QMessageBox.critical(self, "Ошибка", f"Не удалось сохранить PDF:\n{e}")
         self.play_music("Sunbeams in the Stacks.mp3")
         if self.current_user:
             profile = self.db.get_user_profile(self.current_user['id'])
@@ -2534,7 +3755,8 @@ class AppController(QtWidgets.QMainWindow):
                     f"background: transparent; color: #E0E0E0; font-size: {font_size}px; font-weight: bold;")
 
             elif name == 'subtitleLabel':
-                fsize = 25 if self.isFullScreen() else 18
+                # Размер шрифта субтитров берётся из настроек пользователя (14–24 px)
+                fsize = self.settings.subtitle_font_size if not self.isFullScreen() else min(25, self.settings.subtitle_font_size + 5)
                 widget.setStyleSheet(
                     f"background-color: rgba(0,0,100,0.8); color: #E0E0E0; border-radius: 10px; padding: 15px; font-size: {fsize}px;")
                 new_w = int(w * (0.6 if self.isFullScreen() else 0.5))
@@ -2580,12 +3802,13 @@ class AppController(QtWidgets.QMainWindow):
         btn_h = int(65 * btn_scale)
         spacing = int(15 * btn_scale)
         center_x = (w - btn_w) // 2
-        start_y = int(h * 0.48)
+        start_y = int(h * 0.40)  # Подняли ещё выше (было 0.42), чтобы кнопки были на уровне края стола
 
         self.main_menu.startDebateButton.setGeometry(center_x, start_y, btn_w, btn_h)
         self.shop_btn.setGeometry(center_x, start_y + (btn_h + spacing), btn_w, btn_h)
         self.profile_btn.setGeometry(center_x, start_y + 2 * (btn_h + spacing), btn_w, btn_h)
         self.tutorial_btn.setGeometry(center_x, start_y + 3 * (btn_h + spacing), btn_w, btn_h)
+        self.settings_btn.setGeometry(center_x, start_y + 4 * (btn_h + spacing), btn_w, btn_h)
 
         font_scale = scale * 1.08 if self.isFullScreen() else scale
         btn_font_size = int(18 * font_scale)
@@ -2594,13 +3817,14 @@ class AppController(QtWidgets.QMainWindow):
                 background-color: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #d4af37, stop:1 #a67c00);
                 color: #3e2723; font-size: {btn_font_size}px; font-weight: bold;
                 border-radius: 8px; border: 2px solid #a67c00;
+                outline: none;
             }}
             QPushButton:hover {{
                 background-color: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #edd27a, stop:1 #d4af37);
             }}
         """
         for btn in [self.main_menu.startDebateButton, self.shop_btn,
-                    self.profile_btn, self.tutorial_btn]:
+                    self.profile_btn, self.tutorial_btn, self.settings_btn]:
             btn.setStyleSheet(btn_style)
 
         info_w = int(400 * scale)
